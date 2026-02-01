@@ -1,7 +1,33 @@
-# Tauri + React + Typescript
+# Telepromo UI
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Cross‑platform desktop UI for the Telepromo backend.
 
-## Recommended IDE Setup
+## Requirements
+- Node 20+
+- Tauri prerequisites (Linux: webkit2gtk, rsvg2, etc.)
+- Telepromo backend running locally
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+## Run (Dev)
+```bash
+npm install
+npm run tauri dev
+```
+
+## Backend
+Start the API from the backend repo:
+```bash
+cd /home/phantom/Documents/telepromo/telegramGatherTool
+python3 api_server.py
+```
+
+The UI connects to `http://127.0.0.1:8000` by default. Override via:
+```bash
+VITE_API_BASE=http://127.0.0.1:8000
+```
+
+## Features (MVP)
+- Backend status
+- Sessions list
+- Quick DM campaign form
+- Actions & audit log tail
+
