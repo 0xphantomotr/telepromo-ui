@@ -27,6 +27,7 @@ type JobItem = {
 type CommonOptions = {
   use_spintax: boolean;
   media_path: string;
+  speed_profile: string;
   safe_mode: boolean;
   batch_size: string;
   batch_delay: string;
@@ -82,6 +83,18 @@ type ProfileForm = {
   photo: string;
 };
 
+type WarmupForm = {
+  session: string;
+  targets: string;
+  message: string;
+  total_messages: string;
+  min_delay: string;
+  max_delay: string;
+  max_wait_seconds: string;
+  use_spintax: boolean;
+};
+
+
 type MultiForm = CommonOptions & {
   input_file: string;
   message: string;
@@ -115,10 +128,22 @@ type MultiProfileForm = {
   photo: string;
 };
 
+type MultiWarmupForm = {
+  targets: string;
+  message: string;
+  total_messages: string;
+  min_delay: string;
+  max_delay: string;
+  max_wait_seconds: string;
+  use_spintax: boolean;
+};
+
+
 const baseOptions: CommonOptions = {
   use_spintax: false,
   media_path: "",
-  safe_mode: true,
+  speed_profile: "conservative",
+  safe_mode: false,
   batch_size: "5",
   batch_delay: "60",
   message_delay: "5",
@@ -234,6 +259,17 @@ function App() {
     bio: "",
     photo: "",
   });
+  const [warmupForm, setWarmupForm] = useState<WarmupForm>({
+    session: "",
+    targets: "me",
+    message: "Warmup ping",
+    total_messages: "12",
+    min_delay: "600",
+    max_delay: "1800",
+    max_wait_seconds: "3600",
+    use_spintax: false,
+  });
+
 
   const [multiForm, setMultiForm] = useState<MultiForm>({
     input_file: "data/shqipo.csv",
@@ -271,6 +307,16 @@ function App() {
     bio: "",
     photo: "",
   });
+  const [multiWarmupForm, setMultiWarmupForm] = useState<MultiWarmupForm>({
+    targets: "me",
+    message: "Warmup ping",
+    total_messages: "12",
+    min_delay: "600",
+    max_delay: "1800",
+    max_wait_seconds: "3600",
+    use_spintax: false,
+  });
+
   const [multiSessions, setMultiSessions] = useState<string[]>([]);
 
   const [renameSession, setRenameSession] = useState({ old_name: "", new_name: "" });
@@ -346,6 +392,7 @@ function App() {
     setBulkAddForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setForwardForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setProfileForm((prev) => (prev.session ? prev : { ...prev, session: first }));
+    setWarmupForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setDeleteSession((prev) => prev || first);
     setRenameSession((prev) => (prev.old_name ? prev : { ...prev, old_name: first }));
     if (multiSessions.length === 0) {
@@ -442,6 +489,13 @@ function App() {
     const num = Number(value);
     return Number.isFinite(num) ? num : null;
   };
+
+  const parseTargets = (value: string) =>
+    value
+      .split(/[,\n;]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
 
   const ensureMultiSessions = () => {
     if (selectedMultiSessions.length === 0) {
@@ -690,15 +744,18 @@ function App() {
                   placeholder="data/test.jpg"
                 />
               </label>
+              <label>
+                Speed preset
+                <select
+                  value={dmForm.speed_profile}
+                  onChange={(e) => setDmForm({ ...dmForm, speed_profile: e.target.value })}
+                >
+                  <option value="conservative">Conservative (1 msg / 20 min)</option>
+                  <option value="balanced">Balanced (1 msg / 10 min)</option>
+                  <option value="fast">Fast (1 msg / 2 min)</option>
+                </select>
+              </label>
               <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={dmForm.safe_mode}
-                    onChange={(e) => setDmForm({ ...dmForm, safe_mode: e.target.checked })}
-                  />
-                  Safe mode
-                </label>
                 <label className="toggle">
                   <input
                     type="checkbox"
@@ -711,32 +768,6 @@ function App() {
               <details>
                 <summary>Advanced options</summary>
                 <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Batch size
-                      <input
-                        type="number"
-                        value={dmForm.batch_size}
-                        onChange={(e) => setDmForm({ ...dmForm, batch_size: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Batch delay (sec)
-                      <input
-                        type="number"
-                        value={dmForm.batch_delay}
-                        onChange={(e) => setDmForm({ ...dmForm, batch_delay: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Message delay (sec)
-                      <input
-                        type="number"
-                        value={dmForm.message_delay}
-                        onChange={(e) => setDmForm({ ...dmForm, message_delay: e.target.value })}
-                      />
-                    </label>
-                  </div>
                   <div className="row">
                     <label>
                       Rate policy
@@ -861,6 +892,7 @@ function App() {
                       message: dmForm.message,
                       use_spintax: dmForm.use_spintax,
                       media_path: dmForm.media_path || undefined,
+                      speed_profile: dmForm.speed_profile,
                       safe_mode: dmForm.safe_mode,
                       batch_size: toInt(dmForm.batch_size, 5),
                       batch_delay: toInt(dmForm.batch_delay, 60),
@@ -928,15 +960,18 @@ function App() {
                   placeholder="data/test.jpg"
                 />
               </label>
+              <label>
+                Speed preset
+                <select
+                  value={inviteForm.speed_profile}
+                  onChange={(e) => setInviteForm({ ...inviteForm, speed_profile: e.target.value })}
+                >
+                  <option value="conservative">Conservative (1 msg / 20 min)</option>
+                  <option value="balanced">Balanced (1 msg / 10 min)</option>
+                  <option value="fast">Fast (1 msg / 2 min)</option>
+                </select>
+              </label>
               <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={inviteForm.safe_mode}
-                    onChange={(e) => setInviteForm({ ...inviteForm, safe_mode: e.target.checked })}
-                  />
-                  Safe mode
-                </label>
                 <label className="toggle">
                   <input
                     type="checkbox"
@@ -949,32 +984,6 @@ function App() {
               <details>
                 <summary>Advanced options</summary>
                 <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Batch size
-                      <input
-                        type="number"
-                        value={inviteForm.batch_size}
-                        onChange={(e) => setInviteForm({ ...inviteForm, batch_size: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Batch delay (sec)
-                      <input
-                        type="number"
-                        value={inviteForm.batch_delay}
-                        onChange={(e) => setInviteForm({ ...inviteForm, batch_delay: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Message delay (sec)
-                      <input
-                        type="number"
-                        value={inviteForm.message_delay}
-                        onChange={(e) => setInviteForm({ ...inviteForm, message_delay: e.target.value })}
-                      />
-                    </label>
-                  </div>
                   <div className="row">
                     <label>
                       Rate policy
@@ -1096,6 +1105,7 @@ function App() {
                       message: inviteForm.message || undefined,
                       use_spintax: inviteForm.use_spintax,
                       media_path: inviteForm.media_path || undefined,
+                      speed_profile: inviteForm.speed_profile,
                       safe_mode: inviteForm.safe_mode,
                       batch_size: toInt(inviteForm.batch_size, 5),
                       batch_delay: toInt(inviteForm.batch_delay, 60),
@@ -1145,45 +1155,20 @@ function App() {
                   onChange={(e) => setBulkAddForm({ ...bulkAddForm, target_ref: e.target.value })}
                 />
               </label>
-              <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={bulkAddForm.safe_mode}
-                    onChange={(e) => setBulkAddForm({ ...bulkAddForm, safe_mode: e.target.checked })}
-                  />
-                  Safe mode
-                </label>
-              </div>
+              <label>
+                Speed preset
+                <select
+                  value={bulkAddForm.speed_profile}
+                  onChange={(e) => setBulkAddForm({ ...bulkAddForm, speed_profile: e.target.value })}
+                >
+                  <option value="conservative">Conservative (1 msg / 20 min)</option>
+                  <option value="balanced">Balanced (1 msg / 10 min)</option>
+                  <option value="fast">Fast (1 msg / 2 min)</option>
+                </select>
+              </label>
               <details>
                 <summary>Advanced options</summary>
                 <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Batch size
-                      <input
-                        type="number"
-                        value={bulkAddForm.batch_size}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, batch_size: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Batch delay (sec)
-                      <input
-                        type="number"
-                        value={bulkAddForm.batch_delay}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, batch_delay: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Message delay (sec)
-                      <input
-                        type="number"
-                        value={bulkAddForm.message_delay}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, message_delay: e.target.value })}
-                      />
-                    </label>
-                  </div>
                   <div className="row">
                     <label>
                       Rate policy
@@ -1302,6 +1287,7 @@ function App() {
                       session: bulkAddForm.session,
                       input_file: bulkAddForm.input_file,
                       target_ref: bulkAddForm.target_ref,
+                      speed_profile: bulkAddForm.speed_profile,
                       safe_mode: bulkAddForm.safe_mode,
                       batch_size: toInt(bulkAddForm.batch_size, 3),
                       batch_delay: toInt(bulkAddForm.batch_delay, 120),
@@ -1368,6 +1354,17 @@ function App() {
                   placeholder="https://t.me/..."
                 />
               </label>
+              <label>
+                Speed preset
+                <select
+                  value={forwardForm.speed_profile}
+                  onChange={(e) => setForwardForm({ ...forwardForm, speed_profile: e.target.value })}
+                >
+                  <option value="conservative">Conservative (1 msg / 20 min)</option>
+                  <option value="balanced">Balanced (1 msg / 10 min)</option>
+                  <option value="fast">Fast (1 msg / 2 min)</option>
+                </select>
+              </label>
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -1385,44 +1382,10 @@ function App() {
                   />
                   Contains media
                 </label>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={forwardForm.safe_mode}
-                    onChange={(e) => setForwardForm({ ...forwardForm, safe_mode: e.target.checked })}
-                  />
-                  Safe mode
-                </label>
               </div>
               <details>
                 <summary>Advanced options</summary>
                 <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Batch size
-                      <input
-                        type="number"
-                        value={forwardForm.batch_size}
-                        onChange={(e) => setForwardForm({ ...forwardForm, batch_size: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Batch delay (sec)
-                      <input
-                        type="number"
-                        value={forwardForm.batch_delay}
-                        onChange={(e) => setForwardForm({ ...forwardForm, batch_delay: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Message delay (sec)
-                      <input
-                        type="number"
-                        value={forwardForm.message_delay}
-                        onChange={(e) => setForwardForm({ ...forwardForm, message_delay: e.target.value })}
-                      />
-                    </label>
-                  </div>
                   <div className="row">
                     <label>
                       Rate policy
@@ -1545,6 +1508,7 @@ function App() {
                       message_link: forwardForm.message_link || undefined,
                       drop_author: forwardForm.drop_author,
                       has_media: forwardForm.has_media,
+                      speed_profile: forwardForm.speed_profile,
                       safe_mode: forwardForm.safe_mode,
                       batch_size: toInt(forwardForm.batch_size, 5),
                       batch_delay: toInt(forwardForm.batch_delay, 60),
@@ -1632,6 +1596,106 @@ function App() {
               </button>
             </div>
           </div>
+
+
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Warmup</h3>
+              <span className="hint">Light activity to keep account warm</span>
+            </div>
+            <div className="form-grid">
+              <label>
+                Session
+                <select value={warmupForm.session} onChange={(e) => setWarmupForm({ ...warmupForm, session: e.target.value })}>
+                  <option value="">Select session</option>
+                  {sessionOptions.map((session) => (
+                    <option key={session.name} value={session.name}>
+                      {session.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Targets (comma-separated)
+                <input
+                  type="text"
+                  value={warmupForm.targets}
+                  onChange={(e) => setWarmupForm({ ...warmupForm, targets: e.target.value })}
+                  placeholder="me, @username"
+                />
+              </label>
+              <label>
+                Message
+                <textarea
+                  value={warmupForm.message}
+                  onChange={(e) => setWarmupForm({ ...warmupForm, message: e.target.value })}
+                  rows={3}
+                />
+              </label>
+              <label>
+                Total messages
+                <input
+                  type="number"
+                  value={warmupForm.total_messages}
+                  onChange={(e) => setWarmupForm({ ...warmupForm, total_messages: e.target.value })}
+                />
+              </label>
+              <label>
+                Min delay (sec)
+                <input
+                  type="number"
+                  value={warmupForm.min_delay}
+                  onChange={(e) => setWarmupForm({ ...warmupForm, min_delay: e.target.value })}
+                />
+              </label>
+              <label>
+                Max delay (sec)
+                <input
+                  type="number"
+                  value={warmupForm.max_delay}
+                  onChange={(e) => setWarmupForm({ ...warmupForm, max_delay: e.target.value })}
+                />
+              </label>
+              <label>
+                Max wait on rate limit (sec)
+                <input
+                  type="number"
+                  value={warmupForm.max_wait_seconds}
+                  onChange={(e) => setWarmupForm({ ...warmupForm, max_wait_seconds: e.target.value })}
+                />
+              </label>
+              <div className="toggles">
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={warmupForm.use_spintax}
+                    onChange={(e) => setWarmupForm({ ...warmupForm, use_spintax: e.target.checked })}
+                  />
+                  Spintax
+                </label>
+              </div>
+              <button
+                className="primary"
+                onClick={() =>
+                  handleJobStart(
+                    "Warmup",
+                    api.startWarmup({
+                      session: warmupForm.session,
+                      targets: parseTargets(warmupForm.targets),
+                      message: warmupForm.message || undefined,
+                      use_spintax: warmupForm.use_spintax,
+                      total_messages: toInt(warmupForm.total_messages, 12),
+                      min_delay: toInt(warmupForm.min_delay, 600),
+                      max_delay: toInt(warmupForm.max_delay, 1800),
+                      max_wait_seconds: toInt(warmupForm.max_wait_seconds, 3600),
+                    })
+                  )
+                }
+              >
+                Start Warmup
+              </button>
+            </div>
+          </div>
         </div>
       </section>
       )}
@@ -1702,15 +1766,18 @@ function App() {
                   onChange={(e) => setMultiForm({ ...multiForm, media_path: e.target.value })}
                 />
               </label>
+              <label>
+                Speed preset
+                <select
+                  value={multiForm.speed_profile}
+                  onChange={(e) => setMultiForm({ ...multiForm, speed_profile: e.target.value })}
+                >
+                  <option value="conservative">Conservative (1 msg / 20 min)</option>
+                  <option value="balanced">Balanced (1 msg / 10 min)</option>
+                  <option value="fast">Fast (1 msg / 2 min)</option>
+                </select>
+              </label>
               <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={multiForm.safe_mode}
-                    onChange={(e) => setMultiForm({ ...multiForm, safe_mode: e.target.checked })}
-                  />
-                  Safe mode
-                </label>
                 <label className="toggle">
                   <input
                     type="checkbox"
@@ -1723,32 +1790,6 @@ function App() {
               <details>
                 <summary>Advanced options</summary>
                 <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Batch size
-                      <input
-                        type="number"
-                        value={multiForm.batch_size}
-                        onChange={(e) => setMultiForm({ ...multiForm, batch_size: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Batch delay (sec)
-                      <input
-                        type="number"
-                        value={multiForm.batch_delay}
-                        onChange={(e) => setMultiForm({ ...multiForm, batch_delay: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Message delay (sec)
-                      <input
-                        type="number"
-                        value={multiForm.message_delay}
-                        onChange={(e) => setMultiForm({ ...multiForm, message_delay: e.target.value })}
-                      />
-                    </label>
-                  </div>
                   <div className="row">
                     <label>
                       Rate policy
@@ -1870,6 +1911,7 @@ function App() {
                       message: multiForm.message,
                       use_spintax: multiForm.use_spintax,
                       media_path: multiForm.media_path || undefined,
+                      speed_profile: multiForm.speed_profile,
                       safe_mode: multiForm.safe_mode,
                       batch_size: toInt(multiForm.batch_size, 5),
                       batch_delay: toInt(multiForm.batch_delay, 60),
@@ -1924,15 +1966,18 @@ function App() {
                   onChange={(e) => setMultiInviteForm({ ...multiInviteForm, media_path: e.target.value })}
                 />
               </label>
+              <label>
+                Speed preset
+                <select
+                  value={multiInviteForm.speed_profile}
+                  onChange={(e) => setMultiInviteForm({ ...multiInviteForm, speed_profile: e.target.value })}
+                >
+                  <option value="conservative">Conservative (1 msg / 20 min)</option>
+                  <option value="balanced">Balanced (1 msg / 10 min)</option>
+                  <option value="fast">Fast (1 msg / 2 min)</option>
+                </select>
+              </label>
               <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={multiInviteForm.safe_mode}
-                    onChange={(e) => setMultiInviteForm({ ...multiInviteForm, safe_mode: e.target.checked })}
-                  />
-                  Safe mode
-                </label>
                 <label className="toggle">
                   <input
                     type="checkbox"
@@ -1945,32 +1990,6 @@ function App() {
               <details>
                 <summary>Advanced options</summary>
                 <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Batch size
-                      <input
-                        type="number"
-                        value={multiInviteForm.batch_size}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, batch_size: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Batch delay (sec)
-                      <input
-                        type="number"
-                        value={multiInviteForm.batch_delay}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, batch_delay: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Message delay (sec)
-                      <input
-                        type="number"
-                        value={multiInviteForm.message_delay}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, message_delay: e.target.value })}
-                      />
-                    </label>
-                  </div>
                   <div className="row">
                     <label>
                       Rate policy
@@ -2093,6 +2112,7 @@ function App() {
                       message: multiInviteForm.message || undefined,
                       use_spintax: multiInviteForm.use_spintax,
                       media_path: multiInviteForm.media_path || undefined,
+                      speed_profile: multiInviteForm.speed_profile,
                       safe_mode: multiInviteForm.safe_mode,
                       batch_size: toInt(multiInviteForm.batch_size, 5),
                       batch_delay: toInt(multiInviteForm.batch_delay, 60),
@@ -2131,45 +2151,20 @@ function App() {
                   onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, target_ref: e.target.value })}
                 />
               </label>
-              <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={multiBulkAddForm.safe_mode}
-                    onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, safe_mode: e.target.checked })}
-                  />
-                  Safe mode
-                </label>
-              </div>
+              <label>
+                Speed preset
+                <select
+                  value={multiBulkAddForm.speed_profile}
+                  onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, speed_profile: e.target.value })}
+                >
+                  <option value="conservative">Conservative (1 msg / 20 min)</option>
+                  <option value="balanced">Balanced (1 msg / 10 min)</option>
+                  <option value="fast">Fast (1 msg / 2 min)</option>
+                </select>
+              </label>
               <details>
                 <summary>Advanced options</summary>
                 <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Batch size
-                      <input
-                        type="number"
-                        value={multiBulkAddForm.batch_size}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, batch_size: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Batch delay (sec)
-                      <input
-                        type="number"
-                        value={multiBulkAddForm.batch_delay}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, batch_delay: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Message delay (sec)
-                      <input
-                        type="number"
-                        value={multiBulkAddForm.message_delay}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, message_delay: e.target.value })}
-                      />
-                    </label>
-                  </div>
                   <div className="row">
                     <label>
                       Rate policy
@@ -2289,6 +2284,7 @@ function App() {
                       sessions: selectedMultiSessions,
                       input_file: multiBulkAddForm.input_file,
                       target_ref: multiBulkAddForm.target_ref,
+                      speed_profile: multiBulkAddForm.speed_profile,
                       safe_mode: multiBulkAddForm.safe_mode,
                       batch_size: toInt(multiBulkAddForm.batch_size, 3),
                       batch_delay: toInt(multiBulkAddForm.batch_delay, 120),
@@ -2343,6 +2339,17 @@ function App() {
                   onChange={(e) => setMultiForwardForm({ ...multiForwardForm, message_link: e.target.value })}
                 />
               </label>
+              <label>
+                Speed preset
+                <select
+                  value={multiForwardForm.speed_profile}
+                  onChange={(e) => setMultiForwardForm({ ...multiForwardForm, speed_profile: e.target.value })}
+                >
+                  <option value="conservative">Conservative (1 msg / 20 min)</option>
+                  <option value="balanced">Balanced (1 msg / 10 min)</option>
+                  <option value="fast">Fast (1 msg / 2 min)</option>
+                </select>
+              </label>
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -2360,44 +2367,10 @@ function App() {
                   />
                   Contains media
                 </label>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={multiForwardForm.safe_mode}
-                    onChange={(e) => setMultiForwardForm({ ...multiForwardForm, safe_mode: e.target.checked })}
-                  />
-                  Safe mode
-                </label>
               </div>
               <details>
                 <summary>Advanced options</summary>
                 <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Batch size
-                      <input
-                        type="number"
-                        value={multiForwardForm.batch_size}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, batch_size: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Batch delay (sec)
-                      <input
-                        type="number"
-                        value={multiForwardForm.batch_delay}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, batch_delay: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Message delay (sec)
-                      <input
-                        type="number"
-                        value={multiForwardForm.message_delay}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, message_delay: e.target.value })}
-                      />
-                    </label>
-                  </div>
                   <div className="row">
                     <label>
                       Rate policy
@@ -2521,6 +2494,7 @@ function App() {
                       message_link: multiForwardForm.message_link || undefined,
                       drop_author: multiForwardForm.drop_author,
                       has_media: multiForwardForm.has_media,
+                      speed_profile: multiForwardForm.speed_profile,
                       safe_mode: multiForwardForm.safe_mode,
                       batch_size: toInt(multiForwardForm.batch_size, 5),
                       batch_delay: toInt(multiForwardForm.batch_delay, 60),
@@ -2607,6 +2581,96 @@ function App() {
                 }}
               >
                 Start Multi Profile
+              </button>
+            </div>
+          </div>
+
+
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Multi Warmup</h3>
+              <span className="hint">Light warmup across selected sessions</span>
+            </div>
+            <div className="form-grid">
+              <label>
+                Targets (comma-separated)
+                <input
+                  type="text"
+                  value={multiWarmupForm.targets}
+                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, targets: e.target.value })}
+                  placeholder="me, @username"
+                />
+              </label>
+              <label>
+                Message
+                <textarea
+                  value={multiWarmupForm.message}
+                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, message: e.target.value })}
+                  rows={3}
+                />
+              </label>
+              <label>
+                Total messages (per session)
+                <input
+                  type="number"
+                  value={multiWarmupForm.total_messages}
+                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, total_messages: e.target.value })}
+                />
+              </label>
+              <label>
+                Min delay (sec)
+                <input
+                  type="number"
+                  value={multiWarmupForm.min_delay}
+                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, min_delay: e.target.value })}
+                />
+              </label>
+              <label>
+                Max delay (sec)
+                <input
+                  type="number"
+                  value={multiWarmupForm.max_delay}
+                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, max_delay: e.target.value })}
+                />
+              </label>
+              <label>
+                Max wait on rate limit (sec)
+                <input
+                  type="number"
+                  value={multiWarmupForm.max_wait_seconds}
+                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, max_wait_seconds: e.target.value })}
+                />
+              </label>
+              <div className="toggles">
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={multiWarmupForm.use_spintax}
+                    onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, use_spintax: e.target.checked })}
+                  />
+                  Spintax
+                </label>
+              </div>
+              <button
+                className="primary"
+                onClick={() => {
+                  if (!ensureMultiSessions()) return;
+                  handleJobStart(
+                    "Multi warmup",
+                    api.startMultiWarmup({
+                      sessions: selectedMultiSessions,
+                      targets: parseTargets(multiWarmupForm.targets),
+                      message: multiWarmupForm.message || undefined,
+                      use_spintax: multiWarmupForm.use_spintax,
+                      total_messages: toInt(multiWarmupForm.total_messages, 12),
+                      min_delay: toInt(multiWarmupForm.min_delay, 600),
+                      max_delay: toInt(multiWarmupForm.max_delay, 1800),
+                      max_wait_seconds: toInt(multiWarmupForm.max_wait_seconds, 3600),
+                    })
+                  );
+                }}
+              >
+                Start Multi Warmup
               </button>
             </div>
           </div>

@@ -61,6 +61,7 @@ export const api = {
     message: string;
     use_spintax?: boolean;
     media_path?: string;
+    speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
     batch_delay?: number;
@@ -87,6 +88,7 @@ export const api = {
     message?: string;
     use_spintax?: boolean;
     media_path?: string;
+    speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
     batch_delay?: number;
@@ -110,6 +112,7 @@ export const api = {
     session: string;
     input_file: string;
     target_ref: string;
+    speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
     batch_delay?: number;
@@ -137,6 +140,7 @@ export const api = {
     message_link?: string;
     drop_author?: boolean;
     has_media?: boolean;
+    speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
     batch_delay?: number;
@@ -169,12 +173,27 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  startWarmup: (payload: {
+    session: string;
+    targets?: string[];
+    message?: string;
+    use_spintax?: boolean;
+    total_messages?: number;
+    min_delay?: number;
+    max_delay?: number;
+    max_wait_seconds?: number;
+  }) =>
+    request<{ job_id: string }>("/campaigns/warmup", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   startMultiDm: (payload: {
     sessions: string[];
     input_file: string;
     message: string;
     use_spintax?: boolean;
     media_path?: string;
+    speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
     batch_delay?: number;
@@ -201,6 +220,7 @@ export const api = {
     message?: string;
     use_spintax?: boolean;
     media_path?: string;
+    speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
     batch_delay?: number;
@@ -224,6 +244,7 @@ export const api = {
     sessions: string[];
     input_file: string;
     target_ref: string;
+    speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
     batch_delay?: number;
@@ -251,6 +272,7 @@ export const api = {
     message_link?: string;
     drop_author?: boolean;
     has_media?: boolean;
+    speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
     batch_delay?: number;
@@ -267,6 +289,20 @@ export const api = {
     };
   }) =>
     request<{ job_id: string }>("/campaigns/multi/forward", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  startMultiWarmup: (payload: {
+    sessions: string[];
+    targets?: string[];
+    message?: string;
+    use_spintax?: boolean;
+    total_messages?: number;
+    min_delay?: number;
+    max_delay?: number;
+    max_wait_seconds?: number;
+  }) =>
+    request<{ job_id: string }>("/campaigns/multi/warmup", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
