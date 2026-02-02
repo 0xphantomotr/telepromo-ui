@@ -42,6 +42,33 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  presets: () =>
+    request<{ presets: Array<{
+      name: string;
+      interval_seconds: number;
+      strict_timing: boolean;
+      rate_mode: string;
+      max_wait_seconds: number;
+      max_flood_waits: number;
+      max_consecutive_errors: number;
+    }> }>("/presets"),
+  savePreset: (payload: {
+    name: string;
+    interval_seconds: number;
+    strict_timing: boolean;
+    rate_mode: string;
+    max_wait_seconds: number;
+    max_flood_waits: number;
+    max_consecutive_errors: number;
+  }) =>
+    request<{ ok: boolean; preset: Record<string, unknown> }>("/presets", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deletePreset: (name: string) =>
+    request<{ ok: boolean }>(`/presets/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
   jobs: () => request<{ jobs: Array<Record<string, unknown>> }>("/jobs"),
   job: (jobId: string) => request<Record<string, unknown>>(`/jobs/${jobId}`),
   stopJob: (jobId: string) =>
@@ -61,6 +88,7 @@ export const api = {
     message: string;
     use_spintax?: boolean;
     media_path?: string;
+    preset_name?: string;
     speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
@@ -88,6 +116,7 @@ export const api = {
     message?: string;
     use_spintax?: boolean;
     media_path?: string;
+    preset_name?: string;
     speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
@@ -112,6 +141,7 @@ export const api = {
     session: string;
     input_file: string;
     target_ref: string;
+    preset_name?: string;
     speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
@@ -140,6 +170,7 @@ export const api = {
     message_link?: string;
     drop_author?: boolean;
     has_media?: boolean;
+    preset_name?: string;
     speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
@@ -193,6 +224,7 @@ export const api = {
     message: string;
     use_spintax?: boolean;
     media_path?: string;
+    preset_name?: string;
     speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
@@ -244,6 +276,7 @@ export const api = {
     sessions: string[];
     input_file: string;
     target_ref: string;
+    preset_name?: string;
     speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
@@ -272,6 +305,7 @@ export const api = {
     message_link?: string;
     drop_author?: boolean;
     has_media?: boolean;
+    preset_name?: string;
     speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;

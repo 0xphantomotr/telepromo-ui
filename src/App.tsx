@@ -27,17 +27,7 @@ type JobItem = {
 type CommonOptions = {
   use_spintax: boolean;
   media_path: string;
-  speed_profile: string;
-  safe_mode: boolean;
-  batch_size: string;
-  batch_delay: string;
-  message_delay: string;
-  rate_mode: string;
-  max_wait_seconds: string;
-  retry_file: string;
-  max_flood_waits: string;
-  max_consecutive_errors: string;
-  max_total_errors: string;
+  preset_name: string;
   exclude_bots: boolean;
   exclude_deleted: boolean;
   last_seen_days: string;
@@ -95,6 +85,26 @@ type WarmupForm = {
 };
 
 
+type PresetItem = {
+  name: string;
+  interval_seconds: number;
+  strict_timing: boolean;
+  rate_mode: string;
+  max_wait_seconds: number;
+  max_flood_waits: number;
+  max_consecutive_errors: number;
+};
+
+type PresetForm = {
+  name: string;
+  interval_seconds: string;
+  strict_timing: boolean;
+  rate_mode: string;
+  max_wait_seconds: string;
+  max_flood_waits: string;
+  max_consecutive_errors: string;
+};
+
 type MultiForm = CommonOptions & {
   input_file: string;
   message: string;
@@ -142,23 +152,23 @@ type MultiWarmupForm = {
 const baseOptions: CommonOptions = {
   use_spintax: false,
   media_path: "",
-  speed_profile: "conservative",
-  safe_mode: false,
-  batch_size: "5",
-  batch_delay: "60",
-  message_delay: "5",
-  rate_mode: "1",
-  max_wait_seconds: "3600",
-  retry_file: "",
-  max_flood_waits: "3",
-  max_consecutive_errors: "5",
-  max_total_errors: "20",
+  preset_name: "",
   exclude_bots: true,
   exclude_deleted: true,
   last_seen_days: "",
   whitelist_path: "",
   blacklist_path: "",
   max_users: "",
+};
+
+const defaultPresetForm: PresetForm = {
+  name: "",
+  interval_seconds: "600",
+  strict_timing: true,
+  rate_mode: "1",
+  max_wait_seconds: "3600",
+  max_flood_waits: "3",
+  max_consecutive_errors: "5",
 };
 
 const toInt = (value: string, fallback: number) => {
@@ -180,23 +190,6 @@ const buildTargeting = (form: CommonOptions) => ({
   max_users: form.max_users ? toInt(form.max_users, 0) : 0,
 });
 
-const buildRatePolicy = (form: CommonOptions) => {
-  if (!form.rate_mode && !form.max_wait_seconds && !form.retry_file) {
-    return undefined;
-  }
-  return {
-    mode: form.rate_mode || "1",
-    max_wait_seconds: toInt(form.max_wait_seconds, 3600),
-    retry_file: form.retry_file || undefined,
-  };
-};
-
-const buildSafety = (form: CommonOptions) => ({
-  max_flood_waits: toInt(form.max_flood_waits, 3),
-  max_consecutive_errors: toInt(form.max_consecutive_errors, 5),
-  max_total_errors: toInt(form.max_total_errors, 20),
-});
-
 function App() {
   const [connected, setConnected] = useState(false);
   const [healthMessage, setHealthMessage] = useState("Checking backend...");
@@ -209,9 +202,13 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const [presets, setPresets] = useState<PresetItem[]>([]);
+  const [presetForm, setPresetForm] = useState<PresetForm>(defaultPresetForm);
+
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "sessions", label: "Sessions" },
+    { id: "presets", label: "Craft presets" },
     { id: "single", label: "Single" },
     { id: "multi", label: "Multi" },
     { id: "jobs", label: "Jobs" },
@@ -237,10 +234,6 @@ function App() {
     input_file: "data/shqipo.csv",
     target_ref: "",
     ...baseOptions,
-    safe_mode: true,
-    batch_size: "3",
-    batch_delay: "120",
-    message_delay: "15",
   });
   const [forwardForm, setForwardForm] = useState<ForwardForm>({
     session: "",
@@ -286,10 +279,6 @@ function App() {
     input_file: "data/shqipo.csv",
     target_ref: "",
     ...baseOptions,
-    safe_mode: true,
-    batch_size: "3",
-    batch_delay: "120",
-    message_delay: "15",
   });
   const [multiForwardForm, setMultiForwardForm] = useState<MultiForwardForm>({
     input_file: "data/shqipo.csv",
@@ -327,6 +316,8 @@ function App() {
 
   const sessionOptions = useMemo(() => sessions, [sessions]);
 
+  const presetOptions = useMemo(() => presets, [presets]);
+
   const refreshHealth = async () => {
     try {
       const res = await api.health();
@@ -344,6 +335,15 @@ function App() {
       setSessions(res.sessions || []);
     } catch (err: any) {
       setError(err.message || "Failed to load sessions");
+    }
+  };
+
+  const refreshPresets = async () => {
+    try {
+      const res = await api.presets();
+      setPresets(res.presets || []);
+    } catch (err: any) {
+      setError(err.message || "Failed to load presets");
     }
   };
 
@@ -372,6 +372,7 @@ function App() {
   useEffect(() => {
     refreshHealth();
     refreshSessions();
+    refreshPresets();
     refreshLogs();
     refreshJobs();
     const interval = setInterval(() => {
@@ -400,6 +401,21 @@ function App() {
     }
   }, [sessionOptions]);
 
+  useEffect(() => {
+    const firstPreset = presets[0]?.name;
+    if (!firstPreset) {
+      return;
+    }
+    setDmForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
+    setInviteForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
+    setBulkAddForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
+    setForwardForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
+    setMultiForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
+    setMultiInviteForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
+    setMultiBulkAddForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
+    setMultiForwardForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
+  }, [presets]);
+
   const updateNotice = (message: string) => {
     setNotice(message);
     setError(null);
@@ -413,6 +429,54 @@ function App() {
       refreshJobs();
     } catch (err: any) {
       setError(err.message || `Failed to start ${label}`);
+    }
+  };
+
+  const handlePresetSave = async () => {
+    setError(null);
+    const name = presetForm.name.trim();
+    if (!name) {
+      setError("Preset name is required");
+      return;
+    }
+    try {
+      await api.savePreset({
+        name,
+        interval_seconds: toInt(presetForm.interval_seconds, 600),
+        strict_timing: presetForm.strict_timing,
+        rate_mode: presetForm.rate_mode || "1",
+        max_wait_seconds: toInt(presetForm.max_wait_seconds, 3600),
+        max_flood_waits: toInt(presetForm.max_flood_waits, 3),
+        max_consecutive_errors: toInt(presetForm.max_consecutive_errors, 5),
+      });
+      updateNotice(`Preset saved: ${name}`);
+      setPresetForm(defaultPresetForm);
+      refreshPresets();
+    } catch (err: any) {
+      setError(err.message || "Failed to save preset");
+    }
+  };
+
+  const handlePresetEdit = (preset: PresetItem) => {
+    setPresetForm({
+      name: preset.name,
+      interval_seconds: String(preset.interval_seconds),
+      strict_timing: preset.strict_timing,
+      rate_mode: preset.rate_mode,
+      max_wait_seconds: String(preset.max_wait_seconds),
+      max_flood_waits: String(preset.max_flood_waits),
+      max_consecutive_errors: String(preset.max_consecutive_errors),
+    });
+  };
+
+  const handlePresetDelete = async (name: string) => {
+    setError(null);
+    try {
+      await api.deletePreset(name);
+      updateNotice(`Preset deleted: ${name}`);
+      refreshPresets();
+    } catch (err: any) {
+      setError(err.message || "Failed to delete preset");
     }
   };
 
@@ -508,6 +572,7 @@ function App() {
   const selectedMultiSessions = multiSessions.filter(Boolean);
   const showOverview = activeTab === "overview";
   const showSessions = showOverview || activeTab === "sessions";
+  const showPresets = activeTab === "presets";
   const showSingle = activeTab === "single";
   const showMulti = activeTab === "multi";
   const showJobs = showOverview || activeTab === "jobs";
@@ -695,6 +760,126 @@ function App() {
       </section>
       )}
 
+      {showPresets && (
+      <section className="section">
+        <div className="section-header">
+          <h2>Craft presets</h2>
+          <button className="ghost" onClick={refreshPresets}>
+            Refresh
+          </button>
+        </div>
+        <div className="panel-grid">
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Create preset</h3>
+              <span className="hint">Timing + safety bundle</span>
+            </div>
+            <div className="form-grid">
+              <label>
+                Preset name
+                <input
+                  type="text"
+                  value={presetForm.name}
+                  onChange={(e) => setPresetForm({ ...presetForm, name: e.target.value })}
+                  placeholder="Balanced 10m"
+                />
+              </label>
+              <div className="row">
+                <label>
+                  Interval (seconds)
+                  <input
+                    type="number"
+                    value={presetForm.interval_seconds}
+                    onChange={(e) => setPresetForm({ ...presetForm, interval_seconds: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Rate policy
+                  <select
+                    value={presetForm.rate_mode}
+                    onChange={(e) => setPresetForm({ ...presetForm, rate_mode: e.target.value })}
+                  >
+                    <option value="1">Wait and continue</option>
+                    <option value="2">Defer to retry file</option>
+                    <option value="3">Stop on rate limit</option>
+                  </select>
+                </label>
+                <label>
+                  Max wait (sec)
+                  <input
+                    type="number"
+                    value={presetForm.max_wait_seconds}
+                    onChange={(e) => setPresetForm({ ...presetForm, max_wait_seconds: e.target.value })}
+                  />
+                </label>
+              </div>
+              <div className="row">
+                <label>
+                  Max flood waits
+                  <input
+                    type="number"
+                    value={presetForm.max_flood_waits}
+                    onChange={(e) => setPresetForm({ ...presetForm, max_flood_waits: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Max consecutive errors
+                  <input
+                    type="number"
+                    value={presetForm.max_consecutive_errors}
+                    onChange={(e) => setPresetForm({ ...presetForm, max_consecutive_errors: e.target.value })}
+                  />
+                </label>
+              </div>
+              <div className="toggles">
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={presetForm.strict_timing}
+                    onChange={(e) => setPresetForm({ ...presetForm, strict_timing: e.target.checked })}
+                  />
+                  Strict timing (no jitter)
+                </label>
+              </div>
+              <button className="primary" onClick={handlePresetSave}>
+                Save preset
+              </button>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Saved presets</h3>
+              <span className="hint">{presetOptions.length} total</span>
+            </div>
+            <div className="session-list">
+              {presetOptions.length === 0 && (
+                <p className="muted">No presets yet. Create one on the left.</p>
+              )}
+              {presetOptions.map((preset) => (
+                <div key={preset.name} className="session-card">
+                  <div>
+                    <h4>{preset.name}</h4>
+                    <p className="meta">
+                      Interval {preset.interval_seconds}s • Rate mode {preset.rate_mode}
+                    </p>
+                  </div>
+                  <div className="row">
+                    <button className="ghost" onClick={() => handlePresetEdit(preset)}>
+                      Edit
+                    </button>
+                    <button className="danger" onClick={() => handlePresetDelete(preset.name)}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+      )}
+
       {showSingle && (
       <section className="section">
         <div className="section-header">
@@ -715,6 +900,17 @@ function App() {
                   {sessionOptions.map((session) => (
                     <option key={session.name} value={session.name}>
                       {session.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Preset
+                <select value={dmForm.preset_name} onChange={(e) => setDmForm({ ...dmForm, preset_name: e.target.value })}>
+                  <option value="">Select preset</option>
+                  {presetOptions.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name}
                     </option>
                   ))}
                 </select>
@@ -744,17 +940,6 @@ function App() {
                   placeholder="data/test.jpg"
                 />
               </label>
-              <label>
-                Speed preset
-                <select
-                  value={dmForm.speed_profile}
-                  onChange={(e) => setDmForm({ ...dmForm, speed_profile: e.target.value })}
-                >
-                  <option value="conservative">Conservative (1 msg / 20 min)</option>
-                  <option value="balanced">Balanced (1 msg / 10 min)</option>
-                  <option value="fast">Fast (1 msg / 2 min)</option>
-                </select>
-              </label>
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -765,122 +950,6 @@ function App() {
                   Spintax
                 </label>
               </div>
-              <details>
-                <summary>Advanced options</summary>
-                <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Rate policy
-                      <select
-                        value={dmForm.rate_mode}
-                        onChange={(e) => setDmForm({ ...dmForm, rate_mode: e.target.value })}
-                      >
-                        <option value="1">Wait and continue</option>
-                        <option value="2">Defer to retry file</option>
-                        <option value="3">Stop on rate limit</option>
-                      </select>
-                    </label>
-                    <label>
-                      Max wait (sec)
-                      <input
-                        type="number"
-                        value={dmForm.max_wait_seconds}
-                        onChange={(e) => setDmForm({ ...dmForm, max_wait_seconds: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Retry file
-                      <input
-                        type="text"
-                        value={dmForm.retry_file}
-                        onChange={(e) => setDmForm({ ...dmForm, retry_file: e.target.value })}
-                        placeholder="data/file_retry.csv"
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Max flood waits
-                      <input
-                        type="number"
-                        value={dmForm.max_flood_waits}
-                        onChange={(e) => setDmForm({ ...dmForm, max_flood_waits: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max consecutive errors
-                      <input
-                        type="number"
-                        value={dmForm.max_consecutive_errors}
-                        onChange={(e) => setDmForm({ ...dmForm, max_consecutive_errors: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max total errors
-                      <input
-                        type="number"
-                        value={dmForm.max_total_errors}
-                        onChange={(e) => setDmForm({ ...dmForm, max_total_errors: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={dmForm.exclude_bots}
-                        onChange={(e) => setDmForm({ ...dmForm, exclude_bots: e.target.checked })}
-                      />
-                      Exclude bots
-                    </label>
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={dmForm.exclude_deleted}
-                        onChange={(e) => setDmForm({ ...dmForm, exclude_deleted: e.target.checked })}
-                      />
-                      Exclude deleted
-                    </label>
-                    <label>
-                      Last seen days
-                      <input
-                        type="number"
-                        value={dmForm.last_seen_days}
-                        onChange={(e) => setDmForm({ ...dmForm, last_seen_days: e.target.value })}
-                        placeholder="30"
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Whitelist path
-                      <input
-                        type="text"
-                        value={dmForm.whitelist_path}
-                        onChange={(e) => setDmForm({ ...dmForm, whitelist_path: e.target.value })}
-                        placeholder="data/whitelist.txt"
-                      />
-                    </label>
-                    <label>
-                      Blacklist path
-                      <input
-                        type="text"
-                        value={dmForm.blacklist_path}
-                        onChange={(e) => setDmForm({ ...dmForm, blacklist_path: e.target.value })}
-                        placeholder="data/blacklist.txt"
-                      />
-                    </label>
-                    <label>
-                      Max users
-                      <input
-                        type="number"
-                        value={dmForm.max_users}
-                        onChange={(e) => setDmForm({ ...dmForm, max_users: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                </div>
-              </details>
               <button
                 className="primary"
                 onClick={() =>
@@ -892,13 +961,7 @@ function App() {
                       message: dmForm.message,
                       use_spintax: dmForm.use_spintax,
                       media_path: dmForm.media_path || undefined,
-                      speed_profile: dmForm.speed_profile,
-                      safe_mode: dmForm.safe_mode,
-                      batch_size: toInt(dmForm.batch_size, 5),
-                      batch_delay: toInt(dmForm.batch_delay, 60),
-                      message_delay: toInt(dmForm.message_delay, 5),
-                      rate_policy: buildRatePolicy(dmForm),
-                      safety_limits: buildSafety(dmForm),
+                      preset_name: dmForm.preset_name || undefined,
                       targeting: buildTargeting(dmForm),
                     })
                   )
@@ -922,6 +985,17 @@ function App() {
                   {sessionOptions.map((session) => (
                     <option key={session.name} value={session.name}>
                       {session.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Preset
+                <select value={inviteForm.preset_name} onChange={(e) => setInviteForm({ ...inviteForm, preset_name: e.target.value })}>
+                  <option value="">Select preset</option>
+                  {presetOptions.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name}
                     </option>
                   ))}
                 </select>
@@ -960,17 +1034,6 @@ function App() {
                   placeholder="data/test.jpg"
                 />
               </label>
-              <label>
-                Speed preset
-                <select
-                  value={inviteForm.speed_profile}
-                  onChange={(e) => setInviteForm({ ...inviteForm, speed_profile: e.target.value })}
-                >
-                  <option value="conservative">Conservative (1 msg / 20 min)</option>
-                  <option value="balanced">Balanced (1 msg / 10 min)</option>
-                  <option value="fast">Fast (1 msg / 2 min)</option>
-                </select>
-              </label>
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -981,118 +1044,6 @@ function App() {
                   Spintax
                 </label>
               </div>
-              <details>
-                <summary>Advanced options</summary>
-                <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Rate policy
-                      <select
-                        value={inviteForm.rate_mode}
-                        onChange={(e) => setInviteForm({ ...inviteForm, rate_mode: e.target.value })}
-                      >
-                        <option value="1">Wait and continue</option>
-                        <option value="2">Defer to retry file</option>
-                        <option value="3">Stop on rate limit</option>
-                      </select>
-                    </label>
-                    <label>
-                      Max wait (sec)
-                      <input
-                        type="number"
-                        value={inviteForm.max_wait_seconds}
-                        onChange={(e) => setInviteForm({ ...inviteForm, max_wait_seconds: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Retry file
-                      <input
-                        type="text"
-                        value={inviteForm.retry_file}
-                        onChange={(e) => setInviteForm({ ...inviteForm, retry_file: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Max flood waits
-                      <input
-                        type="number"
-                        value={inviteForm.max_flood_waits}
-                        onChange={(e) => setInviteForm({ ...inviteForm, max_flood_waits: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max consecutive errors
-                      <input
-                        type="number"
-                        value={inviteForm.max_consecutive_errors}
-                        onChange={(e) => setInviteForm({ ...inviteForm, max_consecutive_errors: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max total errors
-                      <input
-                        type="number"
-                        value={inviteForm.max_total_errors}
-                        onChange={(e) => setInviteForm({ ...inviteForm, max_total_errors: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={inviteForm.exclude_bots}
-                        onChange={(e) => setInviteForm({ ...inviteForm, exclude_bots: e.target.checked })}
-                      />
-                      Exclude bots
-                    </label>
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={inviteForm.exclude_deleted}
-                        onChange={(e) => setInviteForm({ ...inviteForm, exclude_deleted: e.target.checked })}
-                      />
-                      Exclude deleted
-                    </label>
-                    <label>
-                      Last seen days
-                      <input
-                        type="number"
-                        value={inviteForm.last_seen_days}
-                        onChange={(e) => setInviteForm({ ...inviteForm, last_seen_days: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Whitelist path
-                      <input
-                        type="text"
-                        value={inviteForm.whitelist_path}
-                        onChange={(e) => setInviteForm({ ...inviteForm, whitelist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Blacklist path
-                      <input
-                        type="text"
-                        value={inviteForm.blacklist_path}
-                        onChange={(e) => setInviteForm({ ...inviteForm, blacklist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max users
-                      <input
-                        type="number"
-                        value={inviteForm.max_users}
-                        onChange={(e) => setInviteForm({ ...inviteForm, max_users: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                </div>
-              </details>
               <button
                 className="primary"
                 onClick={() =>
@@ -1105,13 +1056,7 @@ function App() {
                       message: inviteForm.message || undefined,
                       use_spintax: inviteForm.use_spintax,
                       media_path: inviteForm.media_path || undefined,
-                      speed_profile: inviteForm.speed_profile,
-                      safe_mode: inviteForm.safe_mode,
-                      batch_size: toInt(inviteForm.batch_size, 5),
-                      batch_delay: toInt(inviteForm.batch_delay, 60),
-                      message_delay: toInt(inviteForm.message_delay, 5),
-                      rate_policy: buildRatePolicy(inviteForm),
-                      safety_limits: buildSafety(inviteForm),
+                      preset_name: inviteForm.preset_name || undefined,
                       targeting: buildTargeting(inviteForm),
                     })
                   )
@@ -1140,6 +1085,17 @@ function App() {
                 </select>
               </label>
               <label>
+                Preset
+                <select value={bulkAddForm.preset_name} onChange={(e) => setBulkAddForm({ ...bulkAddForm, preset_name: e.target.value })}>
+                  <option value="">Select preset</option>
+                  {presetOptions.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 CSV file
                 <input
                   type="text"
@@ -1155,129 +1111,6 @@ function App() {
                   onChange={(e) => setBulkAddForm({ ...bulkAddForm, target_ref: e.target.value })}
                 />
               </label>
-              <label>
-                Speed preset
-                <select
-                  value={bulkAddForm.speed_profile}
-                  onChange={(e) => setBulkAddForm({ ...bulkAddForm, speed_profile: e.target.value })}
-                >
-                  <option value="conservative">Conservative (1 msg / 20 min)</option>
-                  <option value="balanced">Balanced (1 msg / 10 min)</option>
-                  <option value="fast">Fast (1 msg / 2 min)</option>
-                </select>
-              </label>
-              <details>
-                <summary>Advanced options</summary>
-                <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Rate policy
-                      <select
-                        value={bulkAddForm.rate_mode}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, rate_mode: e.target.value })}
-                      >
-                        <option value="1">Wait and continue</option>
-                        <option value="2">Defer to retry file</option>
-                        <option value="3">Stop on rate limit</option>
-                      </select>
-                    </label>
-                    <label>
-                      Max wait (sec)
-                      <input
-                        type="number"
-                        value={bulkAddForm.max_wait_seconds}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, max_wait_seconds: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Retry file
-                      <input
-                        type="text"
-                        value={bulkAddForm.retry_file}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, retry_file: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Max flood waits
-                      <input
-                        type="number"
-                        value={bulkAddForm.max_flood_waits}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, max_flood_waits: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max consecutive errors
-                      <input
-                        type="number"
-                        value={bulkAddForm.max_consecutive_errors}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, max_consecutive_errors: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max total errors
-                      <input
-                        type="number"
-                        value={bulkAddForm.max_total_errors}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, max_total_errors: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={bulkAddForm.exclude_bots}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, exclude_bots: e.target.checked })}
-                      />
-                      Exclude bots
-                    </label>
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={bulkAddForm.exclude_deleted}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, exclude_deleted: e.target.checked })}
-                      />
-                      Exclude deleted
-                    </label>
-                    <label>
-                      Last seen days
-                      <input
-                        type="number"
-                        value={bulkAddForm.last_seen_days}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, last_seen_days: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Whitelist path
-                      <input
-                        type="text"
-                        value={bulkAddForm.whitelist_path}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, whitelist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Blacklist path
-                      <input
-                        type="text"
-                        value={bulkAddForm.blacklist_path}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, blacklist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max users
-                      <input
-                        type="number"
-                        value={bulkAddForm.max_users}
-                        onChange={(e) => setBulkAddForm({ ...bulkAddForm, max_users: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                </div>
-              </details>
               <button
                 className="primary"
                 onClick={() =>
@@ -1287,13 +1120,7 @@ function App() {
                       session: bulkAddForm.session,
                       input_file: bulkAddForm.input_file,
                       target_ref: bulkAddForm.target_ref,
-                      speed_profile: bulkAddForm.speed_profile,
-                      safe_mode: bulkAddForm.safe_mode,
-                      batch_size: toInt(bulkAddForm.batch_size, 3),
-                      batch_delay: toInt(bulkAddForm.batch_delay, 120),
-                      message_delay: toInt(bulkAddForm.message_delay, 15),
-                      rate_policy: buildRatePolicy(bulkAddForm),
-                      safety_limits: buildSafety(bulkAddForm),
+                      preset_name: bulkAddForm.preset_name || undefined,
                       targeting: buildTargeting(bulkAddForm),
                     })
                   )
@@ -1317,6 +1144,17 @@ function App() {
                   {sessionOptions.map((session) => (
                     <option key={session.name} value={session.name}>
                       {session.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Preset
+                <select value={forwardForm.preset_name} onChange={(e) => setForwardForm({ ...forwardForm, preset_name: e.target.value })}>
+                  <option value="">Select preset</option>
+                  {presetOptions.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name}
                     </option>
                   ))}
                 </select>
@@ -1354,17 +1192,6 @@ function App() {
                   placeholder="https://t.me/..."
                 />
               </label>
-              <label>
-                Speed preset
-                <select
-                  value={forwardForm.speed_profile}
-                  onChange={(e) => setForwardForm({ ...forwardForm, speed_profile: e.target.value })}
-                >
-                  <option value="conservative">Conservative (1 msg / 20 min)</option>
-                  <option value="balanced">Balanced (1 msg / 10 min)</option>
-                  <option value="fast">Fast (1 msg / 2 min)</option>
-                </select>
-              </label>
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -1383,118 +1210,6 @@ function App() {
                   Contains media
                 </label>
               </div>
-              <details>
-                <summary>Advanced options</summary>
-                <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Rate policy
-                      <select
-                        value={forwardForm.rate_mode}
-                        onChange={(e) => setForwardForm({ ...forwardForm, rate_mode: e.target.value })}
-                      >
-                        <option value="1">Wait and continue</option>
-                        <option value="2">Defer to retry file</option>
-                        <option value="3">Stop on rate limit</option>
-                      </select>
-                    </label>
-                    <label>
-                      Max wait (sec)
-                      <input
-                        type="number"
-                        value={forwardForm.max_wait_seconds}
-                        onChange={(e) => setForwardForm({ ...forwardForm, max_wait_seconds: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Retry file
-                      <input
-                        type="text"
-                        value={forwardForm.retry_file}
-                        onChange={(e) => setForwardForm({ ...forwardForm, retry_file: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Max flood waits
-                      <input
-                        type="number"
-                        value={forwardForm.max_flood_waits}
-                        onChange={(e) => setForwardForm({ ...forwardForm, max_flood_waits: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max consecutive errors
-                      <input
-                        type="number"
-                        value={forwardForm.max_consecutive_errors}
-                        onChange={(e) => setForwardForm({ ...forwardForm, max_consecutive_errors: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max total errors
-                      <input
-                        type="number"
-                        value={forwardForm.max_total_errors}
-                        onChange={(e) => setForwardForm({ ...forwardForm, max_total_errors: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={forwardForm.exclude_bots}
-                        onChange={(e) => setForwardForm({ ...forwardForm, exclude_bots: e.target.checked })}
-                      />
-                      Exclude bots
-                    </label>
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={forwardForm.exclude_deleted}
-                        onChange={(e) => setForwardForm({ ...forwardForm, exclude_deleted: e.target.checked })}
-                      />
-                      Exclude deleted
-                    </label>
-                    <label>
-                      Last seen days
-                      <input
-                        type="number"
-                        value={forwardForm.last_seen_days}
-                        onChange={(e) => setForwardForm({ ...forwardForm, last_seen_days: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Whitelist path
-                      <input
-                        type="text"
-                        value={forwardForm.whitelist_path}
-                        onChange={(e) => setForwardForm({ ...forwardForm, whitelist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Blacklist path
-                      <input
-                        type="text"
-                        value={forwardForm.blacklist_path}
-                        onChange={(e) => setForwardForm({ ...forwardForm, blacklist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max users
-                      <input
-                        type="number"
-                        value={forwardForm.max_users}
-                        onChange={(e) => setForwardForm({ ...forwardForm, max_users: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                </div>
-              </details>
               <button
                 className="primary"
                 onClick={() =>
@@ -1504,17 +1219,11 @@ function App() {
                       session: forwardForm.session,
                       input_file: forwardForm.input_file,
                       source_peer: forwardForm.source_peer || undefined,
-                      message_id: parseMessageId(forwardForm.message_id) || undefined,
+                      message_id: forwardForm.message_id ? toInt(forwardForm.message_id, 0) : undefined,
                       message_link: forwardForm.message_link || undefined,
                       drop_author: forwardForm.drop_author,
                       has_media: forwardForm.has_media,
-                      speed_profile: forwardForm.speed_profile,
-                      safe_mode: forwardForm.safe_mode,
-                      batch_size: toInt(forwardForm.batch_size, 5),
-                      batch_delay: toInt(forwardForm.batch_delay, 60),
-                      message_delay: toInt(forwardForm.message_delay, 5),
-                      rate_policy: buildRatePolicy(forwardForm),
-                      safety_limits: buildSafety(forwardForm),
+                      preset_name: forwardForm.preset_name || undefined,
                       targeting: buildTargeting(forwardForm),
                     })
                   )
@@ -1751,6 +1460,17 @@ function App() {
                 />
               </label>
               <label>
+                Preset
+                <select value={multiForm.preset_name} onChange={(e) => setMultiForm({ ...multiForm, preset_name: e.target.value })}>
+                  <option value="">Select preset</option>
+                  {presetOptions.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Message
                 <textarea
                   value={multiForm.message}
@@ -1766,17 +1486,6 @@ function App() {
                   onChange={(e) => setMultiForm({ ...multiForm, media_path: e.target.value })}
                 />
               </label>
-              <label>
-                Speed preset
-                <select
-                  value={multiForm.speed_profile}
-                  onChange={(e) => setMultiForm({ ...multiForm, speed_profile: e.target.value })}
-                >
-                  <option value="conservative">Conservative (1 msg / 20 min)</option>
-                  <option value="balanced">Balanced (1 msg / 10 min)</option>
-                  <option value="fast">Fast (1 msg / 2 min)</option>
-                </select>
-              </label>
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -1787,118 +1496,6 @@ function App() {
                   Spintax
                 </label>
               </div>
-              <details>
-                <summary>Advanced options</summary>
-                <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Rate policy
-                      <select
-                        value={multiForm.rate_mode}
-                        onChange={(e) => setMultiForm({ ...multiForm, rate_mode: e.target.value })}
-                      >
-                        <option value="1">Wait and continue</option>
-                        <option value="2">Defer to retry file</option>
-                        <option value="3">Stop on rate limit</option>
-                      </select>
-                    </label>
-                    <label>
-                      Max wait (sec)
-                      <input
-                        type="number"
-                        value={multiForm.max_wait_seconds}
-                        onChange={(e) => setMultiForm({ ...multiForm, max_wait_seconds: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Retry file
-                      <input
-                        type="text"
-                        value={multiForm.retry_file}
-                        onChange={(e) => setMultiForm({ ...multiForm, retry_file: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Max flood waits
-                      <input
-                        type="number"
-                        value={multiForm.max_flood_waits}
-                        onChange={(e) => setMultiForm({ ...multiForm, max_flood_waits: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max consecutive errors
-                      <input
-                        type="number"
-                        value={multiForm.max_consecutive_errors}
-                        onChange={(e) => setMultiForm({ ...multiForm, max_consecutive_errors: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max total errors
-                      <input
-                        type="number"
-                        value={multiForm.max_total_errors}
-                        onChange={(e) => setMultiForm({ ...multiForm, max_total_errors: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={multiForm.exclude_bots}
-                        onChange={(e) => setMultiForm({ ...multiForm, exclude_bots: e.target.checked })}
-                      />
-                      Exclude bots
-                    </label>
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={multiForm.exclude_deleted}
-                        onChange={(e) => setMultiForm({ ...multiForm, exclude_deleted: e.target.checked })}
-                      />
-                      Exclude deleted
-                    </label>
-                    <label>
-                      Last seen days
-                      <input
-                        type="number"
-                        value={multiForm.last_seen_days}
-                        onChange={(e) => setMultiForm({ ...multiForm, last_seen_days: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Whitelist path
-                      <input
-                        type="text"
-                        value={multiForm.whitelist_path}
-                        onChange={(e) => setMultiForm({ ...multiForm, whitelist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Blacklist path
-                      <input
-                        type="text"
-                        value={multiForm.blacklist_path}
-                        onChange={(e) => setMultiForm({ ...multiForm, blacklist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max users
-                      <input
-                        type="number"
-                        value={multiForm.max_users}
-                        onChange={(e) => setMultiForm({ ...multiForm, max_users: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                </div>
-              </details>
               <button
                 className="primary"
                 onClick={() => {
@@ -1911,13 +1508,7 @@ function App() {
                       message: multiForm.message,
                       use_spintax: multiForm.use_spintax,
                       media_path: multiForm.media_path || undefined,
-                      speed_profile: multiForm.speed_profile,
-                      safe_mode: multiForm.safe_mode,
-                      batch_size: toInt(multiForm.batch_size, 5),
-                      batch_delay: toInt(multiForm.batch_delay, 60),
-                      message_delay: toInt(multiForm.message_delay, 5),
-                      rate_policy: buildRatePolicy(multiForm),
-                      safety_limits: buildSafety(multiForm),
+                      preset_name: multiForm.preset_name || undefined,
                       targeting: buildTargeting(multiForm),
                     })
                   )
@@ -1943,6 +1534,17 @@ function App() {
                 />
               </label>
               <label>
+                Preset
+                <select value={multiInviteForm.preset_name} onChange={(e) => setMultiInviteForm({ ...multiInviteForm, preset_name: e.target.value })}>
+                  <option value="">Select preset</option>
+                  {presetOptions.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Invite URL
                 <input
                   type="text"
@@ -1966,17 +1568,6 @@ function App() {
                   onChange={(e) => setMultiInviteForm({ ...multiInviteForm, media_path: e.target.value })}
                 />
               </label>
-              <label>
-                Speed preset
-                <select
-                  value={multiInviteForm.speed_profile}
-                  onChange={(e) => setMultiInviteForm({ ...multiInviteForm, speed_profile: e.target.value })}
-                >
-                  <option value="conservative">Conservative (1 msg / 20 min)</option>
-                  <option value="balanced">Balanced (1 msg / 10 min)</option>
-                  <option value="fast">Fast (1 msg / 2 min)</option>
-                </select>
-              </label>
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -1987,118 +1578,6 @@ function App() {
                   Spintax
                 </label>
               </div>
-              <details>
-                <summary>Advanced options</summary>
-                <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Rate policy
-                      <select
-                        value={multiInviteForm.rate_mode}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, rate_mode: e.target.value })}
-                      >
-                        <option value="1">Wait and continue</option>
-                        <option value="2">Defer to retry file</option>
-                        <option value="3">Stop on rate limit</option>
-                      </select>
-                    </label>
-                    <label>
-                      Max wait (sec)
-                      <input
-                        type="number"
-                        value={multiInviteForm.max_wait_seconds}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, max_wait_seconds: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Retry file
-                      <input
-                        type="text"
-                        value={multiInviteForm.retry_file}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, retry_file: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Max flood waits
-                      <input
-                        type="number"
-                        value={multiInviteForm.max_flood_waits}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, max_flood_waits: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max consecutive errors
-                      <input
-                        type="number"
-                        value={multiInviteForm.max_consecutive_errors}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, max_consecutive_errors: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max total errors
-                      <input
-                        type="number"
-                        value={multiInviteForm.max_total_errors}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, max_total_errors: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={multiInviteForm.exclude_bots}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, exclude_bots: e.target.checked })}
-                      />
-                      Exclude bots
-                    </label>
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={multiInviteForm.exclude_deleted}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, exclude_deleted: e.target.checked })}
-                      />
-                      Exclude deleted
-                    </label>
-                    <label>
-                      Last seen days
-                      <input
-                        type="number"
-                        value={multiInviteForm.last_seen_days}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, last_seen_days: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Whitelist path
-                      <input
-                        type="text"
-                        value={multiInviteForm.whitelist_path}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, whitelist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Blacklist path
-                      <input
-                        type="text"
-                        value={multiInviteForm.blacklist_path}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, blacklist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max users
-                      <input
-                        type="number"
-                        value={multiInviteForm.max_users}
-                        onChange={(e) => setMultiInviteForm({ ...multiInviteForm, max_users: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                </div>
-              </details>
               <button
                 className="primary"
                 onClick={() => {
@@ -2112,13 +1591,7 @@ function App() {
                       message: multiInviteForm.message || undefined,
                       use_spintax: multiInviteForm.use_spintax,
                       media_path: multiInviteForm.media_path || undefined,
-                      speed_profile: multiInviteForm.speed_profile,
-                      safe_mode: multiInviteForm.safe_mode,
-                      batch_size: toInt(multiInviteForm.batch_size, 5),
-                      batch_delay: toInt(multiInviteForm.batch_delay, 60),
-                      message_delay: toInt(multiInviteForm.message_delay, 5),
-                      rate_policy: buildRatePolicy(multiInviteForm),
-                      safety_limits: buildSafety(multiInviteForm),
+                      preset_name: multiInviteForm.preset_name || undefined,
                       targeting: buildTargeting(multiInviteForm),
                     })
                   )
@@ -2144,6 +1617,17 @@ function App() {
                 />
               </label>
               <label>
+                Preset
+                <select value={multiBulkAddForm.preset_name} onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, preset_name: e.target.value })}>
+                  <option value="">Select preset</option>
+                  {presetOptions.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Target group (@group or id)
                 <input
                   type="text"
@@ -2151,129 +1635,6 @@ function App() {
                   onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, target_ref: e.target.value })}
                 />
               </label>
-              <label>
-                Speed preset
-                <select
-                  value={multiBulkAddForm.speed_profile}
-                  onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, speed_profile: e.target.value })}
-                >
-                  <option value="conservative">Conservative (1 msg / 20 min)</option>
-                  <option value="balanced">Balanced (1 msg / 10 min)</option>
-                  <option value="fast">Fast (1 msg / 2 min)</option>
-                </select>
-              </label>
-              <details>
-                <summary>Advanced options</summary>
-                <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Rate policy
-                      <select
-                        value={multiBulkAddForm.rate_mode}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, rate_mode: e.target.value })}
-                      >
-                        <option value="1">Wait and continue</option>
-                        <option value="2">Defer to retry file</option>
-                        <option value="3">Stop on rate limit</option>
-                      </select>
-                    </label>
-                    <label>
-                      Max wait (sec)
-                      <input
-                        type="number"
-                        value={multiBulkAddForm.max_wait_seconds}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, max_wait_seconds: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Retry file
-                      <input
-                        type="text"
-                        value={multiBulkAddForm.retry_file}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, retry_file: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Max flood waits
-                      <input
-                        type="number"
-                        value={multiBulkAddForm.max_flood_waits}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, max_flood_waits: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max consecutive errors
-                      <input
-                        type="number"
-                        value={multiBulkAddForm.max_consecutive_errors}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, max_consecutive_errors: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max total errors
-                      <input
-                        type="number"
-                        value={multiBulkAddForm.max_total_errors}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, max_total_errors: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={multiBulkAddForm.exclude_bots}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, exclude_bots: e.target.checked })}
-                      />
-                      Exclude bots
-                    </label>
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={multiBulkAddForm.exclude_deleted}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, exclude_deleted: e.target.checked })}
-                      />
-                      Exclude deleted
-                    </label>
-                    <label>
-                      Last seen days
-                      <input
-                        type="number"
-                        value={multiBulkAddForm.last_seen_days}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, last_seen_days: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Whitelist path
-                      <input
-                        type="text"
-                        value={multiBulkAddForm.whitelist_path}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, whitelist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Blacklist path
-                      <input
-                        type="text"
-                        value={multiBulkAddForm.blacklist_path}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, blacklist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max users
-                      <input
-                        type="number"
-                        value={multiBulkAddForm.max_users}
-                        onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, max_users: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                </div>
-              </details>
               <button
                 className="primary"
                 onClick={() => {
@@ -2284,13 +1645,7 @@ function App() {
                       sessions: selectedMultiSessions,
                       input_file: multiBulkAddForm.input_file,
                       target_ref: multiBulkAddForm.target_ref,
-                      speed_profile: multiBulkAddForm.speed_profile,
-                      safe_mode: multiBulkAddForm.safe_mode,
-                      batch_size: toInt(multiBulkAddForm.batch_size, 3),
-                      batch_delay: toInt(multiBulkAddForm.batch_delay, 120),
-                      message_delay: toInt(multiBulkAddForm.message_delay, 15),
-                      rate_policy: buildRatePolicy(multiBulkAddForm),
-                      safety_limits: buildSafety(multiBulkAddForm),
+                      preset_name: multiBulkAddForm.preset_name || undefined,
                       targeting: buildTargeting(multiBulkAddForm),
                     })
                   )
@@ -2316,6 +1671,17 @@ function App() {
                 />
               </label>
               <label>
+                Preset
+                <select value={multiForwardForm.preset_name} onChange={(e) => setMultiForwardForm({ ...multiForwardForm, preset_name: e.target.value })}>
+                  <option value="">Select preset</option>
+                  {presetOptions.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Source peer (@channel or id)
                 <input
                   type="text"
@@ -2339,17 +1705,6 @@ function App() {
                   onChange={(e) => setMultiForwardForm({ ...multiForwardForm, message_link: e.target.value })}
                 />
               </label>
-              <label>
-                Speed preset
-                <select
-                  value={multiForwardForm.speed_profile}
-                  onChange={(e) => setMultiForwardForm({ ...multiForwardForm, speed_profile: e.target.value })}
-                >
-                  <option value="conservative">Conservative (1 msg / 20 min)</option>
-                  <option value="balanced">Balanced (1 msg / 10 min)</option>
-                  <option value="fast">Fast (1 msg / 2 min)</option>
-                </select>
-              </label>
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -2368,118 +1723,6 @@ function App() {
                   Contains media
                 </label>
               </div>
-              <details>
-                <summary>Advanced options</summary>
-                <div className="advanced">
-                  <div className="row">
-                    <label>
-                      Rate policy
-                      <select
-                        value={multiForwardForm.rate_mode}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, rate_mode: e.target.value })}
-                      >
-                        <option value="1">Wait and continue</option>
-                        <option value="2">Defer to retry file</option>
-                        <option value="3">Stop on rate limit</option>
-                      </select>
-                    </label>
-                    <label>
-                      Max wait (sec)
-                      <input
-                        type="number"
-                        value={multiForwardForm.max_wait_seconds}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, max_wait_seconds: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Retry file
-                      <input
-                        type="text"
-                        value={multiForwardForm.retry_file}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, retry_file: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Max flood waits
-                      <input
-                        type="number"
-                        value={multiForwardForm.max_flood_waits}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, max_flood_waits: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max consecutive errors
-                      <input
-                        type="number"
-                        value={multiForwardForm.max_consecutive_errors}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, max_consecutive_errors: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max total errors
-                      <input
-                        type="number"
-                        value={multiForwardForm.max_total_errors}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, max_total_errors: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={multiForwardForm.exclude_bots}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, exclude_bots: e.target.checked })}
-                      />
-                      Exclude bots
-                    </label>
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={multiForwardForm.exclude_deleted}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, exclude_deleted: e.target.checked })}
-                      />
-                      Exclude deleted
-                    </label>
-                    <label>
-                      Last seen days
-                      <input
-                        type="number"
-                        value={multiForwardForm.last_seen_days}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, last_seen_days: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row">
-                    <label>
-                      Whitelist path
-                      <input
-                        type="text"
-                        value={multiForwardForm.whitelist_path}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, whitelist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Blacklist path
-                      <input
-                        type="text"
-                        value={multiForwardForm.blacklist_path}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, blacklist_path: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Max users
-                      <input
-                        type="number"
-                        value={multiForwardForm.max_users}
-                        onChange={(e) => setMultiForwardForm({ ...multiForwardForm, max_users: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                </div>
-              </details>
               <button
                 className="primary"
                 onClick={() => {
@@ -2490,17 +1733,11 @@ function App() {
                       sessions: selectedMultiSessions,
                       input_file: multiForwardForm.input_file,
                       source_peer: multiForwardForm.source_peer || undefined,
-                      message_id: parseMessageId(multiForwardForm.message_id) || undefined,
+                      message_id: multiForwardForm.message_id ? toInt(multiForwardForm.message_id, 0) : undefined,
                       message_link: multiForwardForm.message_link || undefined,
                       drop_author: multiForwardForm.drop_author,
                       has_media: multiForwardForm.has_media,
-                      speed_profile: multiForwardForm.speed_profile,
-                      safe_mode: multiForwardForm.safe_mode,
-                      batch_size: toInt(multiForwardForm.batch_size, 5),
-                      batch_delay: toInt(multiForwardForm.batch_delay, 60),
-                      message_delay: toInt(multiForwardForm.message_delay, 5),
-                      rate_policy: buildRatePolicy(multiForwardForm),
-                      safety_limits: buildSafety(multiForwardForm),
+                      preset_name: multiForwardForm.preset_name || undefined,
                       targeting: buildTargeting(multiForwardForm),
                     })
                   )
