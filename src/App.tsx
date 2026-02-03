@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import "./App.css";
 import { api, API_BASE } from "./lib/api";
 
 const POLL_INTERVAL_MS = 6000;
+
+const WORKFLOW_NODE_WIDTH = 180;
+const WORKFLOW_NODE_HEIGHT = 88;
 
 type SessionItem = {
   name: string;
@@ -105,6 +108,38 @@ type PresetForm = {
   max_consecutive_errors: string;
 };
 
+
+type WorkflowNode = {
+  id: string;
+  type: string;
+  config: Record<string, unknown>;
+  position?: { x: number; y: number } | null;
+};
+
+type WorkflowEdge = {
+  id: string;
+  source: string;
+  target: string;
+  condition?: string | null;
+};
+
+type WorkflowItem = {
+  id: string;
+  name: string;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  meta?: Record<string, unknown>;
+  version?: number;
+};
+
+type WorkflowDraft = {
+  id: string;
+  name: string;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  meta: Record<string, unknown>;
+};
+
 type MultiForm = CommonOptions & {
   input_file: string;
   message: string;
@@ -171,6 +206,22 @@ const defaultPresetForm: PresetForm = {
   max_consecutive_errors: "5",
 };
 
+
+const defaultWorkflowDraft: WorkflowDraft = {
+  id: "",
+  name: "",
+  nodes: [
+    {
+      id: "csv1",
+      type: "csv",
+      config: { input_file: "data/example.csv" },
+      position: { x: 40, y: 40 },
+    },
+  ],
+  edges: [],
+  meta: {},
+};
+
 const toInt = (value: string, fallback: number) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
@@ -203,18 +254,41 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const [presets, setPresets] = useState<PresetItem[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
+  const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraft>(defaultWorkflowDraft);
   const [presetForm, setPresetForm] = useState<PresetForm>(defaultPresetForm);
+
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [linkFrom, setLinkFrom] = useState<string | null>(null);
+  const [draggingNode, setDraggingNode] = useState<{ id: string; offsetX: number; offsetY: number } | null>(null);
 
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "sessions", label: "Sessions" },
     { id: "presets", label: "Craft presets" },
+    { id: "workflows", label: "Workflows" },
     { id: "single", label: "Single" },
     { id: "multi", label: "Multi" },
     { id: "jobs", label: "Jobs" },
     { id: "logs", label: "Logs" },
   ];
   const [activeTab, setActiveTab] = useState("overview");
+
+  const selectedNode = useMemo(
+    () => workflowDraft.nodes.find((node) => node.id === selectedNodeId) || null,
+    [workflowDraft.nodes, selectedNodeId]
+  );
+  const workflowHasCsv = useMemo(
+    () => workflowDraft.nodes.some((node) => node.type === "csv"),
+    [workflowDraft.nodes]
+  );
+  const presetNames = useMemo(() => presets.map((preset) => preset.name), [presets]);
+
+  const nodeLookup = useMemo(
+    () => new Map(workflowDraft.nodes.map((node) => [node.id, node])),
+    [workflowDraft.nodes]
+  );
 
   const [dmForm, setDmForm] = useState<DmForm>({
     session: "",
@@ -338,6 +412,16 @@ function App() {
     }
   };
 
+  const refreshWorkflows = async () => {
+    try {
+      const res = await api.workflows();
+      const list = (res.workflows || []) as WorkflowItem[];
+      setWorkflows(list);
+    } catch (err) {
+      console.warn("Failed to load workflows", err);
+    }
+  };
+
   const refreshPresets = async () => {
     try {
       const res = await api.presets();
@@ -373,6 +457,7 @@ function App() {
     refreshHealth();
     refreshSessions();
     refreshPresets();
+    refreshWorkflows();
     refreshLogs();
     refreshJobs();
     const interval = setInterval(() => {
@@ -416,6 +501,40 @@ function App() {
     setMultiForwardForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
   }, [presets]);
 
+  useEffect(() => {
+    if (!draggingNode) return;
+
+    const handleMove = (event: MouseEvent) => {
+      const bounds = canvasRef.current?.getBoundingClientRect();
+      if (!bounds) return;
+      const x = event.clientX - bounds.left - draggingNode.offsetX;
+      const y = event.clientY - bounds.top - draggingNode.offsetY;
+      setWorkflowDraft((draft) => ({
+        ...draft,
+        nodes: draft.nodes.map((node) =>
+          node.id === draggingNode.id
+            ? {
+                ...node,
+                position: {
+                  x: Math.max(0, Math.min(x, bounds.width - WORKFLOW_NODE_WIDTH)),
+                  y: Math.max(0, Math.min(y, bounds.height - WORKFLOW_NODE_HEIGHT)),
+                },
+              }
+            : node
+        ),
+      }));
+    };
+
+    const handleUp = () => setDraggingNode(null);
+
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+    };
+  }, [draggingNode]);
+
   const updateNotice = (message: string) => {
     setNotice(message);
     setError(null);
@@ -429,6 +548,171 @@ function App() {
       refreshJobs();
     } catch (err: any) {
       setError(err.message || `Failed to start ${label}`);
+    }
+  };
+
+  const addWorkflowNode = (type: string) => {
+    const id = `node_${type}_${Date.now()}`;
+    let config: Record<string, unknown> = {};
+    if (type === "csv") {
+      config = { input_file: "data/shqipo.csv" };
+    } else if (type === "wait") {
+      config = { min_seconds: 600, max_seconds: 900 };
+    } else if (type === "dm") {
+      config = { preset_name: presetNames[0] || "", message: "" };
+    } else if (type === "invite") {
+      config = { preset_name: presetNames[0] || "", invite_url: "" };
+    } else if (type === "bulk_add") {
+      config = { preset_name: presetNames[0] || "", target_ref: "" };
+    } else if (type === "forward") {
+      config = { preset_name: presetNames[0] || "", message_link: "", drop_author: false };
+    } else if (type === "warmup") {
+      config = { preset_name: presetNames[0] || "", targets: "me" };
+    } else if (type === "loop") {
+      config = { max_cycles: 0 };
+    }
+
+    setWorkflowDraft((draft) => ({
+      ...draft,
+      nodes: [
+        ...draft.nodes,
+        {
+          id,
+          type,
+          config,
+          position: {
+            x: 40 + draft.nodes.length * 32,
+            y: 40 + draft.nodes.length * 28,
+          },
+        },
+      ],
+    }));
+    setSelectedNodeId(id);
+  };
+
+  const updateWorkflowNodeConfig = (nodeId: string, patch: Record<string, unknown>) => {
+    setWorkflowDraft((draft) => ({
+      ...draft,
+      nodes: draft.nodes.map((node) =>
+        node.id === nodeId ? { ...node, config: { ...node.config, ...patch } } : node
+      ),
+    }));
+  };
+
+  const removeWorkflowNode = (nodeId: string) => {
+    setWorkflowDraft((draft) => ({
+      ...draft,
+      nodes: draft.nodes.filter((node) => node.id !== nodeId),
+      edges: draft.edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
+    }));
+    if (selectedNodeId === nodeId) {
+      setSelectedNodeId(null);
+    }
+    if (linkFrom === nodeId) {
+      setLinkFrom(null);
+    }
+  };
+
+  const addWorkflowEdge = (source: string, target: string) => {
+    if (source === target) return;
+    setWorkflowDraft((draft) => {
+      if (draft.edges.some((edge) => edge.source === source && edge.target === target)) {
+        return draft;
+      }
+      const edge: WorkflowEdge = {
+        id: `edge_${source}_${target}_${Date.now()}`,
+        source,
+        target,
+      };
+      return { ...draft, edges: [...draft.edges, edge] };
+    });
+  };
+
+  const handleNodeMouseDown = (event: ReactMouseEvent<HTMLDivElement>, node: WorkflowNode) => {
+    const bounds = canvasRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    setSelectedNodeId(node.id);
+    setDraggingNode({
+      id: node.id,
+      offsetX: event.clientX - bounds.left - (node.position?.x ?? 0),
+      offsetY: event.clientY - bounds.top - (node.position?.y ?? 0),
+    });
+  };
+
+  const handleNodeClick = (nodeId: string) => {
+    if (linkFrom && linkFrom !== nodeId) {
+      addWorkflowEdge(linkFrom, nodeId);
+      setLinkFrom(null);
+    }
+    setSelectedNodeId(nodeId);
+  };
+
+  const handleWorkflowNew = () => {
+    setWorkflowDraft(defaultWorkflowDraft);
+    setSelectedNodeId(defaultWorkflowDraft.nodes[0]?.id ?? null);
+    setLinkFrom(null);
+  };
+
+  const handleWorkflowLoad = (workflow: WorkflowItem) => {
+    const nodes = (workflow.nodes || []).map((node, idx) => ({
+      ...node,
+      position: node.position ?? { x: 40 + idx * 32, y: 40 + idx * 28 },
+    }));
+    const edges = (workflow.edges || []).map((edge, idx) => ({
+      id: edge.id || `edge_${idx}_${edge.source}_${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      condition: edge.condition ?? null,
+    }));
+    setWorkflowDraft({
+      id: workflow.id,
+      name: workflow.name,
+      nodes,
+      edges,
+      meta: workflow.meta || {},
+    });
+    setSelectedNodeId(nodes[0]?.id ?? null);
+    setLinkFrom(null);
+  };
+
+  const handleWorkflowSave = async () => {
+    setError(null);
+    const id = workflowDraft.id.trim();
+    const name = workflowDraft.name.trim();
+    if (!id || !name) {
+      setError("Workflow id and name are required");
+      return;
+    }
+    if (!workflowHasCsv) {
+      setError("Workflow must include a CSV node");
+      return;
+    }
+    try {
+      await api.saveWorkflow({
+        id,
+        name,
+        nodes: workflowDraft.nodes,
+        edges: workflowDraft.edges,
+        meta: workflowDraft.meta,
+      });
+      updateNotice(`Workflow saved: ${name}`);
+      refreshWorkflows();
+    } catch (err: any) {
+      setError(err.message || "Failed to save workflow");
+    }
+  };
+
+  const handleWorkflowDelete = async (workflowId: string) => {
+    setError(null);
+    try {
+      await api.deleteWorkflow(workflowId);
+      updateNotice(`Workflow deleted: ${workflowId}`);
+      refreshWorkflows();
+      if (workflowDraft.id === workflowId) {
+        handleWorkflowNew();
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to delete workflow");
     }
   };
 
@@ -573,6 +857,7 @@ function App() {
   const showOverview = activeTab === "overview";
   const showSessions = showOverview || activeTab === "sessions";
   const showPresets = activeTab === "presets";
+  const showWorkflows = activeTab === "workflows";
   const showSingle = activeTab === "single";
   const showMulti = activeTab === "multi";
   const showJobs = showOverview || activeTab === "jobs";
@@ -878,6 +1163,388 @@ function App() {
           </div>
         </div>
       </section>
+      )}
+
+      {showWorkflows && (
+        <section className="workflow-section">
+          <div className="workflow-layout">
+            <div className="panel workflow-palette">
+              <div className="panel-header">
+                <h3>Blocks</h3>
+                <span className="hint">Build your flow</span>
+              </div>
+              <div className="workflow-buttons">
+                <button className="ghost" onClick={() => addWorkflowNode("csv")}>
+                  CSV
+                </button>
+                <button className="ghost" onClick={() => addWorkflowNode("wait")}>
+                  Wait
+                </button>
+                <button className="ghost" onClick={() => addWorkflowNode("dm")}>
+                  DM
+                </button>
+                <button className="ghost" onClick={() => addWorkflowNode("invite")}>
+                  Invite
+                </button>
+                <button className="ghost" onClick={() => addWorkflowNode("bulk_add")}>
+                  Bulk add
+                </button>
+                <button className="ghost" onClick={() => addWorkflowNode("forward")}>
+                  Forward
+                </button>
+                <button className="ghost" onClick={() => addWorkflowNode("warmup")}>
+                  Warmup
+                </button>
+                <button className="ghost" onClick={() => addWorkflowNode("loop")}>
+                  Loop
+                </button>
+              </div>
+
+              <div className="panel-header">
+                <h3>Workflow</h3>
+                <span className="hint">Required before saving</span>
+              </div>
+              <div className="form-grid">
+                <label>
+                  Workflow id
+                  <input
+                    type="text"
+                    value={workflowDraft.id}
+                    onChange={(e) => setWorkflowDraft({ ...workflowDraft, id: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Name
+                  <input
+                    type="text"
+                    value={workflowDraft.name}
+                    onChange={(e) => setWorkflowDraft({ ...workflowDraft, name: e.target.value })}
+                  />
+                </label>
+              </div>
+              <div className="row">
+                <button className="ghost" onClick={handleWorkflowNew}>
+                  New
+                </button>
+                <button className="primary" onClick={handleWorkflowSave}>
+                  Save
+                </button>
+              </div>
+              <p className="workflow-help">
+                {workflowHasCsv ? "CSV node ready." : "Add a CSV node to start."} Click a node, then
+                "Start link" and click the target to connect.
+              </p>
+            </div>
+
+            <div className="panel workflow-canvas-panel">
+              <div className="panel-header">
+                <h3>Canvas</h3>
+                <span className="hint">
+                  {workflowDraft.nodes.length} nodes • {workflowDraft.edges.length} edges
+                </span>
+              </div>
+              <div
+                className="workflow-canvas"
+                ref={canvasRef}
+                onMouseDown={() => {
+                  setSelectedNodeId(null);
+                  setLinkFrom(null);
+                }}
+              >
+                <svg className="workflow-edges">
+                  <defs>
+                    <marker
+                      id="arrow"
+                      markerWidth="10"
+                      markerHeight="10"
+                      refX="8"
+                      refY="3"
+                      orient="auto"
+                    >
+                      <path d="M0,0 L0,6 L9,3 z" fill="rgba(242,183,96,0.9)" />
+                    </marker>
+                  </defs>
+                  {workflowDraft.edges.map((edge) => {
+                    const source = nodeLookup.get(edge.source);
+                    const target = nodeLookup.get(edge.target);
+                    if (!source?.position || !target?.position) return null;
+                    const x1 = source.position.x + WORKFLOW_NODE_WIDTH;
+                    const y1 = source.position.y + WORKFLOW_NODE_HEIGHT / 2;
+                    const x2 = target.position.x;
+                    const y2 = target.position.y + WORKFLOW_NODE_HEIGHT / 2;
+                    const dx = Math.max(40, Math.abs(x2 - x1) * 0.5);
+                    const c1x = x1 + dx;
+                    const c2x = x2 - dx;
+                    const d = `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`;
+                    return (
+                      <path
+                        key={edge.id}
+                        d={d}
+                        fill="none"
+                        stroke="rgba(242,183,96,0.8)"
+                        strokeWidth="2"
+                        markerEnd="url(#arrow)"
+                      />
+                    );
+                  })}
+                </svg>
+
+                {workflowDraft.nodes.map((node) => {
+                  const config = node.config as Record<string, unknown>;
+                  const presetLabel = typeof config.preset_name === "string" ? config.preset_name : "";
+                  return (
+                    <div
+                      key={node.id}
+                      className={`workflow-node${selectedNodeId === node.id ? " selected" : ""}${linkFrom === node.id ? " linking" : ""}`}
+                      style={{
+                        left: node.position?.x ?? 0,
+                        top: node.position?.y ?? 0,
+                      }}
+                      onMouseDown={(event) => {
+                        event.stopPropagation();
+                        handleNodeMouseDown(event, node);
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleNodeClick(node.id);
+                      }}
+                    >
+                      <div className="node-title">{node.type.replace("_", " ")}</div>
+                      {presetLabel && <div className="node-meta">Preset: {presetLabel}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="panel workflow-inspector">
+              <div className="panel-header">
+                <h3>Inspector</h3>
+                <span className="hint">Configure selected node</span>
+              </div>
+              {selectedNode ? (
+                <div className="form-grid">
+                  <label>
+                    Node id
+                    <input type="text" value={selectedNode.id} disabled />
+                  </label>
+                  <label>
+                    Type
+                    <input type="text" value={selectedNode.type} disabled />
+                  </label>
+                  {(() => {
+                    const config = selectedNode.config as Record<string, any>;
+                    const presetValue = typeof config.preset_name === "string" ? config.preset_name : "";
+                    const renderPresetSelect = () => (
+                      <label>
+                        Preset
+                        <select
+                          value={presetValue}
+                          onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { preset_name: e.target.value })}
+                        >
+                          <option value="">Select preset</option>
+                          {presetNames.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    );
+                    if (selectedNode.type === "csv") {
+                      return (
+                        <label>
+                          CSV file
+                          <input
+                            type="text"
+                            value={config.input_file ?? ""}
+                            onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { input_file: e.target.value })}
+                          />
+                        </label>
+                      );
+                    }
+                    if (selectedNode.type === "wait") {
+                      return (
+                        <>
+                          <label>
+                            Min seconds
+                            <input
+                              type="number"
+                              value={config.min_seconds ?? ""}
+                              onChange={(e) =>
+                                updateWorkflowNodeConfig(selectedNode.id, { min_seconds: Number(e.target.value) || 0 })
+                              }
+                            />
+                          </label>
+                          <label>
+                            Max seconds
+                            <input
+                              type="number"
+                              value={config.max_seconds ?? ""}
+                              onChange={(e) =>
+                                updateWorkflowNodeConfig(selectedNode.id, { max_seconds: Number(e.target.value) || 0 })
+                              }
+                            />
+                          </label>
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "dm") {
+                      return (
+                        <>
+                          {renderPresetSelect()}
+                          <label>
+                            Message
+                            <textarea
+                              rows={3}
+                              value={config.message ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message: e.target.value })}
+                            />
+                          </label>
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "invite") {
+                      return (
+                        <>
+                          {renderPresetSelect()}
+                          <label>
+                            Invite link
+                            <input
+                              type="text"
+                              value={config.invite_url ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { invite_url: e.target.value })}
+                            />
+                          </label>
+                          <label>
+                            Message
+                            <textarea
+                              rows={3}
+                              value={config.message ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message: e.target.value })}
+                            />
+                          </label>
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "bulk_add") {
+                      return (
+                        <>
+                          {renderPresetSelect()}
+                          <label>
+                            Target group/channel
+                            <input
+                              type="text"
+                              value={config.target_ref ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { target_ref: e.target.value })}
+                            />
+                          </label>
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "forward") {
+                      return (
+                        <>
+                          {renderPresetSelect()}
+                          <label>
+                            Message link
+                            <input
+                              type="text"
+                              value={config.message_link ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message_link: e.target.value })}
+                            />
+                          </label>
+                          <label className="toggle">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(config.drop_author)}
+                              onChange={(e) =>
+                                updateWorkflowNodeConfig(selectedNode.id, { drop_author: e.target.checked })
+                              }
+                            />
+                            Drop forward author
+                          </label>
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "warmup") {
+                      return (
+                        <>
+                          {renderPresetSelect()}
+                          <label>
+                            Targets
+                            <input
+                              type="text"
+                              value={config.targets ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { targets: e.target.value })}
+                            />
+                          </label>
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "loop") {
+                      return (
+                        <label>
+                          Max cycles (0 = infinite)
+                          <input
+                            type="number"
+                            value={config.max_cycles ?? ""}
+                            onChange={(e) =>
+                              updateWorkflowNodeConfig(selectedNode.id, { max_cycles: Number(e.target.value) || 0 })
+                            }
+                          />
+                        </label>
+                      );
+                    }
+                    return null;
+                  })()}
+                  <div className="row">
+                    <button
+                      className="ghost"
+                      onClick={() => setLinkFrom(selectedNode.id)}
+                    >
+                      Start link
+                    </button>
+                    <button className="danger" onClick={() => removeWorkflowNode(selectedNode.id)}>
+                      Delete node
+                    </button>
+                  </div>
+                  {linkFrom && (
+                    <p className="workflow-help">Linking from: {linkFrom}</p>
+                  )}
+                </div>
+              ) : (
+                <p className="muted">Select a node to edit its settings.</p>
+              )}
+
+              <div className="panel-header">
+                <h3>Saved workflows</h3>
+                <span className="hint">{workflows.length} total</span>
+              </div>
+              <div className="session-list">
+                {workflows.length === 0 && <p className="muted">No workflows saved yet.</p>}
+                {workflows.map((workflow) => (
+                  <div key={workflow.id} className="session-card">
+                    <div>
+                      <h4>{workflow.name}</h4>
+                      <p className="meta">
+                        {workflow.id} • {workflow.nodes?.length ?? 0} nodes
+                      </p>
+                    </div>
+                    <div className="row">
+                      <button className="ghost" onClick={() => handleWorkflowLoad(workflow)}>
+                        Load
+                      </button>
+                      <button className="danger" onClick={() => handleWorkflowDelete(workflow.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
       )}
 
       {showSingle && (

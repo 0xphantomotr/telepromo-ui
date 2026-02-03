@@ -69,6 +69,17 @@ export const api = {
     request<{ ok: boolean }>(`/presets/${encodeURIComponent(name)}`, {
       method: "DELETE",
     }),
+  workflows: () =>
+    request<{ workflows: Array<Record<string, unknown>> }>("/workflows"),
+  saveWorkflow: (payload: Record<string, unknown>) =>
+    request<{ ok: boolean; workflow: Record<string, unknown> }>("/workflows", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteWorkflow: (workflowId: string) =>
+    request<{ ok: boolean }>(`/workflows/${encodeURIComponent(workflowId)}`, {
+      method: "DELETE",
+    }),
   jobs: () => request<{ jobs: Array<Record<string, unknown>> }>("/jobs"),
   job: (jobId: string) => request<Record<string, unknown>>(`/jobs/${jobId}`),
   stopJob: (jobId: string) =>
