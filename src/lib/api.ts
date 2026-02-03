@@ -80,6 +80,14 @@ export const api = {
     request<{ ok: boolean }>(`/workflows/${encodeURIComponent(workflowId)}`, {
       method: "DELETE",
     }),
+  startWorkflow: (workflowId: string) =>
+    request<{ ok: boolean; workflow: Record<string, unknown> }>(`/workflows/${encodeURIComponent(workflowId)}/start`, {
+      method: "POST",
+    }),
+  stopWorkflow: (workflowId: string) =>
+    request<{ ok: boolean; workflow: Record<string, unknown> }>(`/workflows/${encodeURIComponent(workflowId)}/stop`, {
+      method: "POST",
+    }),
   jobs: () => request<{ jobs: Array<Record<string, unknown>> }>("/jobs"),
   job: (jobId: string) => request<Record<string, unknown>>(`/jobs/${jobId}`),
   stopJob: (jobId: string) =>
