@@ -529,7 +529,12 @@ function App() {
       const res = await api.aiSettings();
       const provider = res.provider || "openai";
       setAiProvider(provider);
-      const fallbackModel = provider === "gemini" ? "gemini-2.5-flash" : "gpt-4o-mini";
+      const fallbackModel =
+        provider === "gemini"
+          ? "gemini-2.5-flash"
+          : provider === "groq"
+          ? "llama-3.1-8b-instant"
+          : "gpt-4o-mini";
       setAiModel(res.model || fallbackModel);
       setAiHasKey(Boolean(res.has_key));
     } catch (err: any) {
@@ -543,7 +548,7 @@ function App() {
       return;
     }
     try {
-      const modelValue = aiModel.trim() || null;
+      const modelValue = aiProvider === "openai" ? null : aiModel.trim() || null;
       const res = await api.saveAiSettings({
         provider: aiProvider,
         api_key: aiKey.trim(),
@@ -559,7 +564,7 @@ function App() {
 
   const handleClearAiSettings = async () => {
     try {
-      const modelValue = aiModel.trim() || null;
+      const modelValue = aiProvider === "openai" ? null : aiModel.trim() || null;
       const res = await api.saveAiSettings({ provider: aiProvider, api_key: "", model: modelValue });
       setAiHasKey(Boolean(res.has_key));
       setAiKey("");
@@ -1545,23 +1550,34 @@ function App() {
                   onChange={(e) => {
                     const next = e.target.value;
                     setAiProvider(next);
-                    setAiModel(next === "gemini" ? "gemini-2.5-flash" : "gpt-4o-mini");
+                    const nextModel =
+                      next === "gemini"
+                        ? "gemini-2.5-flash"
+                        : next === "groq"
+                        ? "llama-3.1-8b-instant"
+                        : "gpt-4o-mini";
+                    setAiModel(nextModel);
                   }}
                 >
                   <option value="openai">OpenAI</option>
                   <option value="gemini">Gemini</option>
+                  <option value="groq">Groq</option>
                 </select>
               </label>
-              {aiProvider === "gemini" && (
+              {aiProvider !== "openai" && (
                 <label>
                   Model
                   <input
                     type="text"
                     value={aiModel}
                     onChange={(e) => setAiModel(e.target.value)}
-                    placeholder="gemini-2.5-flash"
+                    placeholder={aiProvider === "groq" ? "llama-3.1-8b-instant" : "gemini-2.5-flash"}
                   />
-                  <span className="hint">Use a supported Gemini model, e.g. gemini-2.5-flash.</span>
+                  <span className="hint">
+                    {aiProvider === "groq"
+                      ? "Use a supported Groq model, e.g. llama-3.1-8b-instant."
+                      : "Use a supported Gemini model, e.g. gemini-2.5-flash."}
+                  </span>
                 </label>
               )}
               <label>
