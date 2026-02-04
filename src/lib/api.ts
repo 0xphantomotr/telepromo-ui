@@ -26,6 +26,40 @@ export const api = {
         last_used?: string;
       }>;
     }>("/sessions"),
+  sessionProxy: (name: string) =>
+    request<{
+      proxy: {
+        proxy_type: string;
+        hostname?: string;
+        port?: number;
+        username?: string | null;
+        password?: string | null;
+        secret?: string | null;
+      } | null;
+    }>(`/sessions/${encodeURIComponent(name)}/proxy`),
+  saveSessionProxy: (
+    name: string,
+    payload: {
+      proxy_type: string;
+      hostname?: string | null;
+      port?: number | null;
+      username?: string | null;
+      password?: string | null;
+      secret?: string | null;
+      enabled?: boolean;
+    }
+  ) =>
+    request<{ ok: boolean; proxy?: Record<string, unknown> | null }>(
+      `/sessions/${encodeURIComponent(name)}/proxy`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    ),
+  deleteSessionProxy: (name: string) =>
+    request<{ ok: boolean }>(`/sessions/${encodeURIComponent(name)}/proxy`, {
+      method: "DELETE",
+    }),
   renameSession: (payload: { old_name: string; new_name: string }) =>
     request<{ renamed: boolean; old_name: string; new_name: string }>("/sessions/rename", {
       method: "POST",
@@ -42,24 +76,32 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  presets: () =>
+  presets: (kind?: string) =>
     request<{ presets: Array<{
       name: string;
+      kind?: string;
       interval_seconds: number;
       strict_timing: boolean;
       rate_mode: string;
       max_wait_seconds: number;
       max_flood_waits: number;
       max_consecutive_errors: number;
-    }> }>("/presets"),
+      min_delay?: number | null;
+      max_delay?: number | null;
+      total_messages?: number | null;
+    }> }>(kind ? `/presets?kind=${encodeURIComponent(kind)}` : "/presets"),
   savePreset: (payload: {
     name: string;
+    kind?: string;
     interval_seconds: number;
     strict_timing: boolean;
     rate_mode: string;
     max_wait_seconds: number;
     max_flood_waits: number;
     max_consecutive_errors: number;
+    min_delay?: number | null;
+    max_delay?: number | null;
+    total_messages?: number | null;
   }) =>
     request<{ ok: boolean; preset: Record<string, unknown> }>("/presets", {
       method: "POST",
@@ -68,6 +110,13 @@ export const api = {
   deletePreset: (name: string) =>
     request<{ ok: boolean }>(`/presets/${encodeURIComponent(name)}`, {
       method: "DELETE",
+    }),
+  aiSettings: () =>
+    request<{ provider?: string | null; has_key?: boolean; model?: string | null }>("/settings/ai"),
+  saveAiSettings: (payload: { provider: string; api_key?: string | null; model?: string | null }) =>
+    request<{ ok: boolean; provider: string; has_key: boolean; model?: string | null }>("/settings/ai", {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
   workflows: () =>
     request<{ workflows: Array<Record<string, unknown>> }>("/workflows"),
@@ -94,8 +143,14 @@ export const api = {
     request<{ stopped: boolean }>(`/jobs/${jobId}/stop`, {
       method: "POST",
     }),
-  actionsLog: (lines = 120) => request<{ path: string | null; lines: string[] }>(`/logs/actions?lines=${lines}`),
-  auditLog: (lines = 120) => request<{ path: string | null; lines: string[] }>(`/logs/audit?lines=${lines}`),
+  actionsLog: (lines = 120, jobId?: string) =>
+    request<{ path: string | null; lines: string[] }>(
+      `/logs/actions?lines=${lines}${jobId ? `&job_id=${encodeURIComponent(jobId)}` : ""}`
+    ),
+  auditLog: (lines = 120, jobId?: string) =>
+    request<{ path: string | null; lines: string[] }>(
+      `/logs/audit?lines=${lines}${jobId ? `&job_id=${encodeURIComponent(jobId)}` : ""}`
+    ),
   mergeCsv: (payload: { input_files: string[]; output_file: string }) =>
     request<{ output_file: string; total_rows: number; unique_users: number }>("/tools/merge-csv", {
       method: "POST",
@@ -227,7 +282,7 @@ export const api = {
     session: string;
     targets?: string[];
     message?: string;
-    use_spintax?: boolean;
+    preset_name?: string;
     total_messages?: number;
     min_delay?: number;
     max_delay?: number;
@@ -349,7 +404,7 @@ export const api = {
     sessions: string[];
     targets?: string[];
     message?: string;
-    use_spintax?: boolean;
+    preset_name?: string;
     total_messages?: number;
     min_delay?: number;
     max_delay?: number;

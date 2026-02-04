@@ -79,33 +79,46 @@ type ProfileForm = {
 type WarmupForm = {
   session: string;
   targets: string;
-  message: string;
-  total_messages: string;
-  min_delay: string;
-  max_delay: string;
-  max_wait_seconds: string;
-  use_spintax: boolean;
+  preset_name: string;
 };
 
 
 type PresetItem = {
   name: string;
+  kind?: string;
   interval_seconds: number;
   strict_timing: boolean;
   rate_mode: string;
   max_wait_seconds: number;
   max_flood_waits: number;
   max_consecutive_errors: number;
+  min_delay?: number | null;
+  max_delay?: number | null;
+  total_messages?: number | null;
 };
 
 type PresetForm = {
   name: string;
+  kind: string;
   interval_seconds: string;
   strict_timing: boolean;
   rate_mode: string;
   max_wait_seconds: string;
   max_flood_waits: string;
   max_consecutive_errors: string;
+  min_delay: string;
+  max_delay: string;
+  total_messages: string;
+};
+
+type SessionProxyForm = {
+  session: string;
+  proxy_type: string;
+  hostname: string;
+  port: string;
+  username: string;
+  password: string;
+  secret: string;
 };
 
 
@@ -175,12 +188,7 @@ type MultiProfileForm = {
 
 type MultiWarmupForm = {
   targets: string;
-  message: string;
-  total_messages: string;
-  min_delay: string;
-  max_delay: string;
-  max_wait_seconds: string;
-  use_spintax: boolean;
+  preset_name: string;
 };
 
 
@@ -198,12 +206,26 @@ const baseOptions: CommonOptions = {
 
 const defaultPresetForm: PresetForm = {
   name: "",
+  kind: "dm",
   interval_seconds: "600",
   strict_timing: true,
   rate_mode: "1",
   max_wait_seconds: "3600",
   max_flood_waits: "3",
   max_consecutive_errors: "5",
+  min_delay: "600",
+  max_delay: "1800",
+  total_messages: "12",
+};
+
+const defaultProxyForm: SessionProxyForm = {
+  session: "",
+  proxy_type: "socks5",
+  hostname: "",
+  port: "",
+  username: "",
+  password: "",
+  secret: "",
 };
 
 
@@ -245,7 +267,14 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [healthMessage, setHealthMessage] = useState("Checking backend...");
   const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [proxyForm, setProxyForm] = useState<SessionProxyForm>(defaultProxyForm);
+  const [aiProvider, setAiProvider] = useState("openai");
+  const [aiKey, setAiKey] = useState("");
+  const [aiHasKey, setAiHasKey] = useState(false);
+  const [aiModel, setAiModel] = useState("");
   const [jobs, setJobs] = useState<JobItem[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState<string>("");
+  const selectedJobRef = useRef<string>("");
   const [actionsLog, setActionsLog] = useState<string[]>([]);
   const [auditLog, setAuditLog] = useState<string[]>([]);
   const [lastLogPath, setLastLogPath] = useState<string | null>(null);
@@ -273,7 +302,7 @@ function App() {
     { id: "overview", label: "Overview" },
     { id: "sessions", label: "Sessions" },
     { id: "presets", label: "Craft presets" },
-    { id: "workflows", label: "Workflows" },
+    { id: "workflows", label: "Humanistic loops" },
     { id: "single", label: "Single" },
     { id: "multi", label: "Multi" },
     { id: "jobs", label: "Jobs" },
@@ -289,7 +318,21 @@ function App() {
     () => workflowDraft.nodes.some((node) => node.type === "session"),
     [workflowDraft.nodes]
   );
-  const presetNames = useMemo(() => presets.map((preset) => preset.name), [presets]);
+  const dmPresets = useMemo(
+    () => presets.filter((preset) => (preset.kind || "dm") === "dm"),
+    [presets]
+  );
+  const warmupPresets = useMemo(
+    () => presets.filter((preset) => (preset.kind || "dm") === "warmup"),
+    [presets]
+  );
+  const presetNames = useMemo(() => dmPresets.map((preset) => preset.name), [dmPresets]);
+  const warmupPresetNames = useMemo(
+    () => warmupPresets.map((preset) => preset.name),
+    [warmupPresets]
+  );
+
+  const presetOptions = useMemo(() => dmPresets, [dmPresets]);
 
   const nodeLookup = useMemo(
     () => new Map(workflowDraft.nodes.map((node) => [node.id, node])),
@@ -338,13 +381,8 @@ function App() {
   });
   const [warmupForm, setWarmupForm] = useState<WarmupForm>({
     session: "",
-    targets: "me",
-    message: "Warmup ping",
-    total_messages: "12",
-    min_delay: "600",
-    max_delay: "1800",
-    max_wait_seconds: "3600",
-    use_spintax: false,
+    targets: "",
+    preset_name: "",
   });
 
 
@@ -381,13 +419,8 @@ function App() {
     photo: "",
   });
   const [multiWarmupForm, setMultiWarmupForm] = useState<MultiWarmupForm>({
-    targets: "me",
-    message: "Warmup ping",
-    total_messages: "12",
-    min_delay: "600",
-    max_delay: "1800",
-    max_wait_seconds: "3600",
-    use_spintax: false,
+    targets: "",
+    preset_name: "",
   });
 
   const [multiSessions, setMultiSessions] = useState<string[]>([]);
@@ -400,7 +433,6 @@ function App() {
 
   const sessionOptions = useMemo(() => sessions, [sessions]);
 
-  const presetOptions = useMemo(() => presets, [presets]);
 
   const refreshHealth = async () => {
     try {
@@ -419,6 +451,121 @@ function App() {
       setSessions(res.sessions || []);
     } catch (err: any) {
       setError(err.message || "Failed to load sessions");
+    }
+  };
+
+  const loadSessionProxy = async (sessionName: string) => {
+    if (!sessionName) {
+      setProxyForm(defaultProxyForm);
+      return;
+    }
+    try {
+      const res = await api.sessionProxy(sessionName);
+      if (res.proxy) {
+        setProxyForm({
+          session: sessionName,
+          proxy_type: res.proxy.proxy_type || "socks5",
+          hostname: res.proxy.hostname || "",
+          port: res.proxy.port ? String(res.proxy.port) : "",
+          username: res.proxy.username || "",
+          password: res.proxy.password || "",
+          secret: res.proxy.secret || "",
+        });
+      } else {
+        setProxyForm({ ...defaultProxyForm, session: sessionName });
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to load proxy config");
+    }
+  };
+
+  const handleSaveProxy = async () => {
+    if (!proxyForm.session) {
+      setError("Select a session first");
+      return;
+    }
+    const port = proxyForm.port ? Number(proxyForm.port) : 0;
+    if (!proxyForm.hostname || !port) {
+      setError("Proxy host and port are required");
+      return;
+    }
+    if (proxyForm.proxy_type === "mtproxy" && !proxyForm.secret) {
+      setError("MTProxy secret is required");
+      return;
+    }
+    try {
+      await api.saveSessionProxy(proxyForm.session, {
+        proxy_type: proxyForm.proxy_type,
+        hostname: proxyForm.hostname.trim(),
+        port,
+        username: proxyForm.username || undefined,
+        password: proxyForm.password || undefined,
+        secret: proxyForm.secret || undefined,
+      });
+      updateNotice("Proxy saved");
+      refreshSessions();
+    } catch (err: any) {
+      setError(err.message || "Failed to save proxy");
+    }
+  };
+
+  const handleClearProxy = async () => {
+    if (!proxyForm.session) {
+      setError("Select a session first");
+      return;
+    }
+    try {
+      await api.deleteSessionProxy(proxyForm.session);
+      setProxyForm({ ...defaultProxyForm, session: proxyForm.session });
+      updateNotice("Proxy removed");
+      refreshSessions();
+    } catch (err: any) {
+      setError(err.message || "Failed to remove proxy");
+    }
+  };
+
+  const loadAiSettings = async () => {
+    try {
+      const res = await api.aiSettings();
+      const provider = res.provider || "openai";
+      setAiProvider(provider);
+      const fallbackModel = provider === "gemini" ? "gemini-2.5-flash" : "gpt-4o-mini";
+      setAiModel(res.model || fallbackModel);
+      setAiHasKey(Boolean(res.has_key));
+    } catch (err: any) {
+      setError(err.message || "Failed to load AI settings");
+    }
+  };
+
+  const handleSaveAiSettings = async () => {
+    if (!aiKey.trim()) {
+      setError("Enter an API key to save");
+      return;
+    }
+    try {
+      const modelValue = aiModel.trim() || null;
+      const res = await api.saveAiSettings({
+        provider: aiProvider,
+        api_key: aiKey.trim(),
+        model: modelValue,
+      });
+      setAiHasKey(Boolean(res.has_key));
+      setAiKey("");
+      updateNotice("AI key saved");
+    } catch (err: any) {
+      setError(err.message || "Failed to save AI key");
+    }
+  };
+
+  const handleClearAiSettings = async () => {
+    try {
+      const modelValue = aiModel.trim() || null;
+      const res = await api.saveAiSettings({ provider: aiProvider, api_key: "", model: modelValue });
+      setAiHasKey(Boolean(res.has_key));
+      setAiKey("");
+      updateNotice("AI key cleared");
+    } catch (err: any) {
+      setError(err.message || "Failed to clear AI key");
     }
   };
 
@@ -443,10 +590,11 @@ function App() {
 
   const refreshLogs = async () => {
     try {
-      const actions = await api.actionsLog();
+      const jobId = selectedJobRef.current || undefined;
+      const actions = await api.actionsLog(120, jobId);
       setActionsLog(actions.lines || []);
       setLastLogPath(actions.path);
-      const audit = await api.auditLog();
+      const audit = await api.auditLog(120, jobId);
       setAuditLog(audit.lines || []);
       setLastAuditPath(audit.path);
     } catch (err: any) {
@@ -457,7 +605,14 @@ function App() {
   const refreshJobs = async () => {
     try {
       const res = await api.jobs();
-      setJobs((res.jobs || []) as JobItem[]);
+      const list = (res.jobs || []) as JobItem[];
+      setJobs(list);
+      if (!selectedJobRef.current && list.length) {
+        const sorted = [...list].sort((a, b) => (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || ""));
+        if (sorted[0]?.id) {
+          setSelectedJobId(sorted[0].id);
+        }
+      }
     } catch (err: any) {
       setError(err.message || "Failed to load jobs");
     }
@@ -466,6 +621,7 @@ function App() {
   useEffect(() => {
     refreshHealth();
     refreshSessions();
+    loadAiSettings();
     refreshPresets();
     refreshWorkflows();
     refreshLogs();
@@ -479,6 +635,11 @@ function App() {
   }, []);
 
   useEffect(() => {
+    selectedJobRef.current = selectedJobId;
+    refreshLogs();
+  }, [selectedJobId]);
+
+  useEffect(() => {
     const first = sessionOptions[0]?.name;
     if (!first) {
       return;
@@ -489,12 +650,20 @@ function App() {
     setForwardForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setProfileForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setWarmupForm((prev) => (prev.session ? prev : { ...prev, session: first }));
+    setProxyForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setDeleteSession((prev) => prev || first);
     setRenameSession((prev) => (prev.old_name ? prev : { ...prev, old_name: first }));
     if (multiSessions.length === 0) {
       setMultiSessions([first]);
     }
   }, [sessionOptions]);
+
+  useEffect(() => {
+    if (!proxyForm.session) {
+      return;
+    }
+    loadSessionProxy(proxyForm.session);
+  }, [proxyForm.session]);
 
   useEffect(() => {
     if (!workflowDraft.id.trim() && workflowDraft.nodes.some((node) => node.type === "session")) {
@@ -519,6 +688,18 @@ function App() {
     setMultiBulkAddForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
     setMultiForwardForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
   }, [presets]);
+
+  useEffect(() => {
+    if (warmupPresets.length === 0) {
+      return;
+    }
+    const firstWarmup = warmupPresets[0]?.name;
+    if (!firstWarmup) {
+      return;
+    }
+    setWarmupForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstWarmup }));
+    setMultiWarmupForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstWarmup }));
+  }, [warmupPresets]);
 
   useEffect(() => {
     if (!draggingNode) return;
@@ -590,6 +771,7 @@ function App() {
     try {
       const res = await jobPromise;
       updateNotice(`${label} started: ${res.job_id}`);
+      setSelectedJobId(res.job_id);
       refreshJobs();
     } catch (err: any) {
       setError(err.message || `Failed to start ${label}`);
@@ -608,17 +790,15 @@ function App() {
     } else if (type === "wait") {
       config = { min_seconds: 600, max_seconds: 900 };
     } else if (type === "dm") {
-      config = { preset_name: presetNames[0] || "", message: "", input_file: "data/shqipo.csv" };
+      config = { preset_name: presetNames[0] || "", message: "", input_file: "data/shqipo.csv", repeat_min: 1, repeat_max: 1 };
     } else if (type === "invite") {
-      config = { preset_name: presetNames[0] || "", invite_url: "", message: "", input_file: "data/shqipo.csv" };
+      config = { preset_name: presetNames[0] || "", invite_url: "", message: "", input_file: "data/shqipo.csv", repeat_min: 1, repeat_max: 1 };
     } else if (type === "bulk_add") {
-      config = { preset_name: presetNames[0] || "", target_ref: "", input_file: "data/shqipo.csv" };
+      config = { preset_name: presetNames[0] || "", target_ref: "", input_file: "data/shqipo.csv", repeat_min: 1, repeat_max: 1 };
     } else if (type === "forward") {
-      config = { preset_name: presetNames[0] || "", message_link: "", drop_author: false, input_file: "data/shqipo.csv" };
+      config = { preset_name: presetNames[0] || "", message_link: "", drop_author: false, input_file: "data/shqipo.csv", repeat_min: 1, repeat_max: 1 };
     } else if (type === "warmup") {
-      config = { preset_name: presetNames[0] || "", targets: "me", input_file: "data/shqipo.csv" };
-    } else if (type === "loop") {
-      config = { max_cycles: 0 };
+      config = { preset_name: warmupPresetNames[0] || "", targets: "me", input_file: "data/shqipo.csv", repeat_min: 1, repeat_max: 1 };
     }
 
     setWorkflowDraft((draft) => {
@@ -666,18 +846,30 @@ function App() {
     }
   };
 
+
+  const removeWorkflowLinks = (sourceId: string) => {
+    setWorkflowDraft((draft) => ({
+      ...draft,
+      edges: draft.edges.filter((edge) => edge.source !== sourceId),
+    }));
+    if (linkFrom === sourceId) {
+      setLinkFrom(null);
+    }
+  };
+
   const addWorkflowEdge = (source: string, target: string) => {
     if (source === target) return;
     setWorkflowDraft((draft) => {
-      if (draft.edges.some((edge) => edge.source === source && edge.target === target)) {
-        return draft;
+      const filteredEdges = draft.edges.filter((edge) => edge.source !== source);
+      if (filteredEdges.some((edge) => edge.source === source && edge.target === target)) {
+        return { ...draft, edges: filteredEdges };
       }
       const edge: WorkflowEdge = {
         id: `edge_${source}_${target}_${Date.now()}`,
         source,
         target,
       };
-      return { ...draft, edges: [...draft.edges, edge] };
+      return { ...draft, edges: [...filteredEdges, edge] };
     });
   };
 
@@ -746,6 +938,14 @@ function App() {
       const inputFile = typeof config.input_file === "string" ? config.input_file.trim() : "";
       if (!inputFile) {
         errors.push(`Action node ${node.id} (${node.type}) needs a CSV file.`);
+      }
+      const repeatMin = Number(config.repeat_min ?? 1);
+      const repeatMax = Number(config.repeat_max ?? 1);
+      if (!Number.isFinite(repeatMin) || repeatMin < 1) {
+        errors.push(`Action node ${node.id} (${node.type}) needs a valid repeat min.`);
+      }
+      if (!Number.isFinite(repeatMax) || repeatMax < repeatMin) {
+        errors.push(`Action node ${node.id} (${node.type}) needs a repeat max >= min.`);
       }
       if (node.type === "dm") {
         const message = typeof config.message === "string" ? config.message.trim() : "";
@@ -906,16 +1106,23 @@ function App() {
       setError("Preset name is required");
       return;
     }
+    const kind = presetForm.kind || "dm";
     try {
-      await api.savePreset({
-        name,
-        interval_seconds: toInt(presetForm.interval_seconds, 600),
-        strict_timing: presetForm.strict_timing,
-        rate_mode: presetForm.rate_mode || "1",
-        max_wait_seconds: toInt(presetForm.max_wait_seconds, 3600),
-        max_flood_waits: toInt(presetForm.max_flood_waits, 3),
-        max_consecutive_errors: toInt(presetForm.max_consecutive_errors, 5),
-      });
+      const payload: Record<string, unknown> = { name, kind };
+      if (kind == "warmup") {
+        payload.min_delay = toInt(presetForm.min_delay, 600);
+        payload.max_delay = toInt(presetForm.max_delay, 1800);
+        payload.total_messages = toInt(presetForm.total_messages, 12);
+        payload.max_wait_seconds = toInt(presetForm.max_wait_seconds, 3600);
+      } else {
+        payload.interval_seconds = toInt(presetForm.interval_seconds, 600);
+        payload.strict_timing = presetForm.strict_timing;
+        payload.rate_mode = presetForm.rate_mode || "1";
+        payload.max_wait_seconds = toInt(presetForm.max_wait_seconds, 3600);
+        payload.max_flood_waits = toInt(presetForm.max_flood_waits, 3);
+        payload.max_consecutive_errors = toInt(presetForm.max_consecutive_errors, 5);
+      }
+      await api.savePreset(payload as any);
       updateNotice(`Preset saved: ${name}`);
       setPresetForm(defaultPresetForm);
       refreshPresets();
@@ -925,14 +1132,22 @@ function App() {
   };
 
   const handlePresetEdit = (preset: PresetItem) => {
+    const kind = preset.kind || "dm";
     setPresetForm({
+      ...defaultPresetForm,
       name: preset.name,
-      interval_seconds: String(preset.interval_seconds),
-      strict_timing: preset.strict_timing,
-      rate_mode: preset.rate_mode,
-      max_wait_seconds: String(preset.max_wait_seconds),
-      max_flood_waits: String(preset.max_flood_waits),
-      max_consecutive_errors: String(preset.max_consecutive_errors),
+      kind,
+      interval_seconds: String(preset.interval_seconds ?? defaultPresetForm.interval_seconds),
+      strict_timing: preset.strict_timing ?? defaultPresetForm.strict_timing,
+      rate_mode: preset.rate_mode ?? defaultPresetForm.rate_mode,
+      max_wait_seconds: String(preset.max_wait_seconds ?? defaultPresetForm.max_wait_seconds),
+      max_flood_waits: String(preset.max_flood_waits ?? defaultPresetForm.max_flood_waits),
+      max_consecutive_errors: String(
+        preset.max_consecutive_errors ?? defaultPresetForm.max_consecutive_errors
+      ),
+      min_delay: String(preset.min_delay ?? defaultPresetForm.min_delay),
+      max_delay: String(preset.max_delay ?? defaultPresetForm.max_delay),
+      total_messages: String(preset.total_messages ?? defaultPresetForm.total_messages),
     });
   };
 
@@ -1224,9 +1439,155 @@ function App() {
               </button>
             </div>
           </div>
+
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Session Proxy</h3>
+              <span className="hint">One proxy per session</span>
+            </div>
+            <div className="form-grid">
+              <label>
+                Session
+                <select
+                  value={proxyForm.session}
+                  onChange={(e) => setProxyForm((prev) => ({ ...prev, session: e.target.value }))}
+                >
+                  <option value="">Select session</option>
+                  {sessionOptions.map((session) => (
+                    <option key={session.name} value={session.name}>
+                      {session.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Proxy type
+                <select
+                  value={proxyForm.proxy_type}
+                  onChange={(e) => setProxyForm((prev) => ({ ...prev, proxy_type: e.target.value }))}
+                >
+                  <option value="socks5">SOCKS5</option>
+                  <option value="http">HTTP/HTTPS</option>
+                  <option value="mtproxy">MTProxy</option>
+                  <option value="residential">Residential</option>
+                </select>
+              </label>
+              <div className="row">
+                <label>
+                  Host
+                  <input
+                    type="text"
+                    value={proxyForm.hostname}
+                    onChange={(e) => setProxyForm((prev) => ({ ...prev, hostname: e.target.value }))}
+                    placeholder="proxy.example.com"
+                  />
+                </label>
+                <label>
+                  Port
+                  <input
+                    type="number"
+                    value={proxyForm.port}
+                    onChange={(e) => setProxyForm((prev) => ({ ...prev, port: e.target.value }))}
+                    placeholder="1080"
+                  />
+                </label>
+              </div>
+              <div className="row">
+                <label>
+                  Username (optional)
+                  <input
+                    type="text"
+                    value={proxyForm.username}
+                    onChange={(e) => setProxyForm((prev) => ({ ...prev, username: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Password (optional)
+                  <input
+                    type="password"
+                    value={proxyForm.password}
+                    onChange={(e) => setProxyForm((prev) => ({ ...prev, password: e.target.value }))}
+                  />
+                </label>
+              </div>
+              {proxyForm.proxy_type === "mtproxy" && (
+                <label>
+                  MTProxy secret
+                  <input
+                    type="text"
+                    value={proxyForm.secret}
+                    onChange={(e) => setProxyForm((prev) => ({ ...prev, secret: e.target.value }))}
+                    placeholder="hex secret"
+                  />
+                </label>
+              )}
+              <div className="row">
+                <button className="primary" onClick={handleSaveProxy}>
+                  Save proxy
+                </button>
+                <button className="ghost" onClick={handleClearProxy}>
+                  Remove proxy
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-header">
+              <h3>AI API Keys</h3>
+              <span className="hint">Global key for spintax / warmup</span>
+            </div>
+            <div className="form-grid">
+              <label>
+                Provider
+                <select
+                  value={aiProvider}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setAiProvider(next);
+                    setAiModel(next === "gemini" ? "gemini-2.5-flash" : "gpt-4o-mini");
+                  }}
+                >
+                  <option value="openai">OpenAI</option>
+                  <option value="gemini">Gemini</option>
+                </select>
+              </label>
+              {aiProvider === "gemini" && (
+                <label>
+                  Model
+                  <input
+                    type="text"
+                    value={aiModel}
+                    onChange={(e) => setAiModel(e.target.value)}
+                    placeholder="gemini-2.5-flash"
+                  />
+                  <span className="hint">Use a supported Gemini model, e.g. gemini-2.5-flash.</span>
+                </label>
+              )}
+              <label>
+                API key
+                <input
+                  type="password"
+                  value={aiKey}
+                  onChange={(e) => setAiKey(e.target.value)}
+                  placeholder={aiHasKey ? "Saved (enter to replace)" : "Paste your API key"}
+                />
+              </label>
+              <div className="row">
+                <button className="primary" onClick={handleSaveAiSettings}>
+                  Save key
+                </button>
+                <button className="ghost" onClick={handleClearAiSettings}>
+                  Clear key
+                </button>
+              </div>
+              {aiHasKey && <p className="hint">A key is stored for {aiProvider}.</p>}
+            </div>
+          </div>
         </div>
       </section>
       )}
+
 
       {showPresets && (
       <section className="section">
@@ -1252,63 +1613,116 @@ function App() {
                   placeholder="Balanced 10m"
                 />
               </label>
-              <div className="row">
-                <label>
-                  Interval (seconds)
-                  <input
-                    type="number"
-                    value={presetForm.interval_seconds}
-                    onChange={(e) => setPresetForm({ ...presetForm, interval_seconds: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Rate policy
-                  <select
-                    value={presetForm.rate_mode}
-                    onChange={(e) => setPresetForm({ ...presetForm, rate_mode: e.target.value })}
-                  >
-                    <option value="1">Wait and continue</option>
-                    <option value="2">Defer to retry file</option>
-                    <option value="3">Stop on rate limit</option>
-                  </select>
-                </label>
-                <label>
-                  Max wait (sec)
-                  <input
-                    type="number"
-                    value={presetForm.max_wait_seconds}
-                    onChange={(e) => setPresetForm({ ...presetForm, max_wait_seconds: e.target.value })}
-                  />
-                </label>
-              </div>
-              <div className="row">
-                <label>
-                  Max flood waits
-                  <input
-                    type="number"
-                    value={presetForm.max_flood_waits}
-                    onChange={(e) => setPresetForm({ ...presetForm, max_flood_waits: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Max consecutive errors
-                  <input
-                    type="number"
-                    value={presetForm.max_consecutive_errors}
-                    onChange={(e) => setPresetForm({ ...presetForm, max_consecutive_errors: e.target.value })}
-                  />
-                </label>
-              </div>
-              <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={presetForm.strict_timing}
-                    onChange={(e) => setPresetForm({ ...presetForm, strict_timing: e.target.checked })}
-                  />
-                  Strict timing (no jitter)
-                </label>
-              </div>
+              <label>
+                Preset type
+                <select
+                  value={presetForm.kind}
+                  onChange={(e) => setPresetForm({ ...presetForm, kind: e.target.value })}
+                >
+                  <option value="dm">DM / Invite / Bulk / Forward</option>
+                  <option value="warmup">Warmup</option>
+                </select>
+              </label>
+              {presetForm.kind === "dm" ? (
+                <>
+                  <div className="row">
+                    <label>
+                      Interval (seconds)
+                      <input
+                        type="number"
+                        value={presetForm.interval_seconds}
+                        onChange={(e) => setPresetForm({ ...presetForm, interval_seconds: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Rate policy
+                      <select
+                        value={presetForm.rate_mode}
+                        onChange={(e) => setPresetForm({ ...presetForm, rate_mode: e.target.value })}
+                      >
+                        <option value="1">Wait and continue</option>
+                        <option value="2">Defer to retry file</option>
+                        <option value="3">Stop on rate limit</option>
+                      </select>
+                    </label>
+                    <label>
+                      Max wait (sec)
+                      <input
+                        type="number"
+                        value={presetForm.max_wait_seconds}
+                        onChange={(e) => setPresetForm({ ...presetForm, max_wait_seconds: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <div className="row">
+                    <label>
+                      Max flood waits
+                      <input
+                        type="number"
+                        value={presetForm.max_flood_waits}
+                        onChange={(e) => setPresetForm({ ...presetForm, max_flood_waits: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Max consecutive errors
+                      <input
+                        type="number"
+                        value={presetForm.max_consecutive_errors}
+                        onChange={(e) => setPresetForm({ ...presetForm, max_consecutive_errors: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <div className="toggles">
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={presetForm.strict_timing}
+                        onChange={(e) => setPresetForm({ ...presetForm, strict_timing: e.target.checked })}
+                      />
+                      Strict timing (no jitter)
+                    </label>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="row">
+                    <label>
+                      Total messages
+                      <input
+                        type="number"
+                        value={presetForm.total_messages}
+                        onChange={(e) => setPresetForm({ ...presetForm, total_messages: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Min delay (sec)
+                      <input
+                        type="number"
+                        value={presetForm.min_delay}
+                        onChange={(e) => setPresetForm({ ...presetForm, min_delay: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Max delay (sec)
+                      <input
+                        type="number"
+                        value={presetForm.max_delay}
+                        onChange={(e) => setPresetForm({ ...presetForm, max_delay: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <div className="row">
+                    <label>
+                      Max wait (sec)
+                      <input
+                        type="number"
+                        value={presetForm.max_wait_seconds}
+                        onChange={(e) => setPresetForm({ ...presetForm, max_wait_seconds: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                </>
+              )}
               <button className="primary" onClick={handlePresetSave}>
                 Save preset
               </button>
@@ -1317,19 +1731,42 @@ function App() {
 
           <div className="panel">
             <div className="panel-header">
-              <h3>Saved presets</h3>
-              <span className="hint">{presetOptions.length} total</span>
+              <h3>Saved DM presets</h3>
+              <span className="hint">{dmPresets.length} total</span>
             </div>
             <div className="session-list">
-              {presetOptions.length === 0 && (
-                <p className="muted">No presets yet. Create one on the left.</p>
-              )}
-              {presetOptions.map((preset) => (
+              {dmPresets.length === 0 && <p className="muted">No DM presets yet.</p>}
+              {dmPresets.map((preset) => (
                 <div key={preset.name} className="session-card">
                   <div>
                     <h4>{preset.name}</h4>
                     <p className="meta">
                       Interval {preset.interval_seconds}s • Rate mode {preset.rate_mode}
+                    </p>
+                  </div>
+                  <div className="row">
+                    <button className="ghost" onClick={() => handlePresetEdit(preset)}>
+                      Edit
+                    </button>
+                    <button className="danger" onClick={() => handlePresetDelete(preset.name)}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="panel-header" style={{ marginTop: "16px" }}>
+              <h3>Saved Warmup presets</h3>
+              <span className="hint">{warmupPresets.length} total</span>
+            </div>
+            <div className="session-list">
+              {warmupPresets.length === 0 && <p className="muted">No warmup presets yet.</p>}
+              {warmupPresets.map((preset) => (
+                <div key={preset.name} className="session-card">
+                  <div>
+                    <h4>{preset.name}</h4>
+                    <p className="meta">
+                      Total {preset.total_messages ?? 0} • {preset.min_delay ?? 0}-{preset.max_delay ?? 0}s
                     </p>
                   </div>
                   <div className="row">
@@ -1354,7 +1791,7 @@ function App() {
             <div className="panel workflow-palette">
               <div className="panel-header">
                 <h3>Blocks</h3>
-                <span className="hint">Build your flow</span>
+                <span className="hint">Build your loop</span>
               </div>
               <div className="workflow-buttons">
                 <button className="ghost" onClick={() => addWorkflowNode("session")}>
@@ -1378,9 +1815,6 @@ function App() {
                 <button className="ghost" disabled={!workflowHasSession} onClick={() => addWorkflowNode("warmup")}>
                   Warmup
                 </button>
-                <button className="ghost" disabled={!workflowHasSession} onClick={() => addWorkflowNode("loop")}>
-                  Loop
-                </button>
               </div>
 
               <p className="workflow-help">
@@ -1388,11 +1822,11 @@ function App() {
               </p>
 
               <div className="panel-header">
-                <h3>Saved workflows</h3>
+                <h3>Saved loops</h3>
                 <span className="hint">{workflows.length} total</span>
               </div>
               <div className="session-list">
-                {workflows.length === 0 && <p className="muted">No workflows saved yet.</p>}
+                {workflows.length === 0 && <p className="muted">No loops saved yet.</p>}
                 {workflows.map((workflow) => (
                   <div key={workflow.id} className="session-card">
                     <div>
@@ -1414,17 +1848,17 @@ function App() {
               </div>
             </div>
 
-            <div className="panel workflow-canvas-panel" ref={canvasPanelRef}>
+            <div className="panel workflow-canvas-panel">
               <div className="panel-header workflow-header">
                 <div>
-                  <h3>Canvas</h3>
+                  <h3>Humanistic loop</h3>
                   <span className="hint">
                     {workflowDraft.nodes.length} nodes • {workflowDraft.edges.length} edges
                   </span>
                 </div>
                 <div className="workflow-toolbar">
                   <label>
-                    Id
+                    Loop id
                     <input
                       type="text"
                       value={workflowDraft.id}
@@ -1463,7 +1897,6 @@ function App() {
                   if (event.target === event.currentTarget) {
                     setSelectedNodeId(null);
                     setLinkFrom(null);
-                    setInspectorOpen(false);
                     setPanning({
                       startX: event.clientX,
                       startY: event.clientY,
@@ -1551,7 +1984,6 @@ function App() {
                           event.stopPropagation();
                           handleNodeClick(event, node);
                         }}
-                        onContextMenu={(event) => handleNodeContextMenu(event, node)}
                       >
                         <div className="node-header">
                           <div className="node-title">{node.type.replace("_", " ")}</div>
@@ -1567,6 +1999,18 @@ function App() {
                               }}
                             >
                               🔗
+                            </button>
+                            <button
+                              className="node-btn"
+                              title="Unlink"
+                              aria-label="Unlink"
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                removeWorkflowLinks(node.id);
+                              }}
+                            >
+                              Unlink
                             </button>
                             <button
                               className="node-btn danger"
@@ -1591,262 +2035,298 @@ function App() {
                     );
                   })}
                 </div>
+              </div>
+            </div>
 
-                {inspectorOpen && selectedNode && (
-                  <div
-                    className="workflow-inspector-popup"
-                    style={{ left: inspectorPos.x, top: inspectorPos.y }}
-                    onClick={(event) => event.stopPropagation()}
-                  onMouseDown={(event) => event.stopPropagation()}
-                  >
-                    <div className="panel-header">
-                      <h3>Inspector</h3>
-                      <span className="hint">{selectedNode.type}</span>
-                    </div>
-                    <div className="form-grid">
+            <div className="panel workflow-inspector">
+              <div className="panel-header">
+                <h3>Inspector</h3>
+                <span className="hint">Configure selected node</span>
+              </div>
+              {selectedNode ? (
+                <div className="form-grid">
+                  <label>
+                    Node id
+                    <input type="text" value={selectedNode.id} disabled />
+                  </label>
+                  <label>
+                    Type
+                    <input type="text" value={selectedNode.type} disabled />
+                  </label>
+                  {(() => {
+                    const config = selectedNode.config as Record<string, any>;
+                    const presetValue = typeof config.preset_name === "string" ? config.preset_name : "";
+                    const inputFileValue = typeof config.input_file === "string" ? config.input_file : "";
+                    
+                    const repeatMinRaw = config.repeat_min;
+                    const repeatMaxRaw = config.repeat_max;
+                    const repeatMinValue =
+                      repeatMinRaw === undefined || repeatMinRaw === null || repeatMinRaw === ""
+                        ? ""
+                        : repeatMinRaw;
+                    const repeatMaxValue =
+                      repeatMaxRaw === undefined || repeatMaxRaw === null || repeatMaxRaw === ""
+                        ? ""
+                        : repeatMaxRaw;
+                    const renderRepeat = () => (
+                      <div className="row">
+                        <label>
+                          Repeat min
+                          <input
+                            type="number"
+                            min={1}
+                            value={repeatMinValue}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              updateWorkflowNodeConfig(selectedNode.id, {
+                                repeat_min: raw === "" ? "" : Number(raw),
+                              });
+                            }}
+                          />
+                        </label>
+                        <label>
+                          Repeat max
+                          <input
+                            type="number"
+                            min={1}
+                            value={repeatMaxValue}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              updateWorkflowNodeConfig(selectedNode.id, {
+                                repeat_max: raw === "" ? "" : Number(raw),
+                              });
+                            }}
+                          />
+                        </label>
+                      </div>
+                    );
+
+                    const renderPresetSelect = (options: string[]) => (
                       <label>
-                        Node id
-                        <input type="text" value={selectedNode.id} disabled />
+                        Preset
+                        <select
+                          value={presetValue}
+                          onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { preset_name: e.target.value })}
+                        >
+                          <option value="">Select preset</option>
+                          {options.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
                       </label>
-                      {(() => {
-                        const config = selectedNode.config as Record<string, any>;
-                        const presetValue = typeof config.preset_name === "string" ? config.preset_name : "";
-                        const inputFileValue = typeof config.input_file === "string" ? config.input_file : "";
-                        const renderPresetSelect = () => (
+                    );
+                    const renderInputFile = () => (
+                      <label>
+                        CSV file
+                        <input
+                          type="text"
+                          value={inputFileValue}
+                          onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { input_file: e.target.value })}
+                        />
+                      </label>
+                    );
+                    if (selectedNode.type === "session") {
+                      const mode = config.mode === "multi" ? "multi" : "single";
+                      const sessionsValue = Array.isArray(config.sessions) ? config.sessions : [];
+                      return (
+                        <>
                           <label>
-                            Preset
+                            Mode
                             <select
-                              value={presetValue}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { preset_name: e.target.value })}
+                              value={mode}
+                              onChange={(e) =>
+                                updateWorkflowNodeConfig(selectedNode.id, {
+                                  mode: e.target.value,
+                                  sessions: e.target.value === "single" ? sessionsValue.slice(0, 1) : sessionsValue,
+                                })
+                              }
                             >
-                              <option value="">Select preset</option>
-                              {presetNames.map((name) => (
-                                <option key={name} value={name}>
-                                  {name}
-                                </option>
-                              ))}
+                              <option value="single">Single account</option>
+                              <option value="multi">Multi account</option>
                             </select>
                           </label>
-                        );
-                        const renderInputFile = () => (
+                          {mode === "single" ? (
+                            <label>
+                              Session
+                              <select
+                                value={sessionsValue[0] || ""}
+                                onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { sessions: [e.target.value] })}
+                              >
+                                <option value="">Select session</option>
+                                {sessionOptions.map((item) => (
+                                  <option key={item.name} value={item.name}>
+                                    {item.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          ) : (
+                            <div className="checkbox-grid">
+                              {sessionOptions.map((item) => (
+                                <label key={item.name} className="checkbox">
+                                  <input
+                                    type="checkbox"
+                                    checked={sessionsValue.includes(item.name)}
+                                    onChange={() => {
+                                      const next = sessionsValue.includes(item.name)
+                                        ? sessionsValue.filter((value: string) => value !== item.name)
+                                        : [...sessionsValue, item.name];
+                                      updateWorkflowNodeConfig(selectedNode.id, { sessions: next });
+                                    }}
+                                  />
+                                  {item.name}
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "wait") {
+                      return (
+                        <>
                           <label>
-                            CSV file
+                            Min seconds
                             <input
-                              type="text"
-                              value={inputFileValue}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { input_file: e.target.value })}
+                              type="number"
+                              value={config.min_seconds ?? 0}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { min_seconds: Number(e.target.value) || 0 })}
                             />
                           </label>
-                        );
-                        if (selectedNode.type === "session") {
-                          const mode = config.mode === "multi" ? "multi" : "single";
-                          const sessionsValue = Array.isArray(config.sessions) ? config.sessions : [];
-                          return (
-                            <>
-                              <label>
-                                Mode
-                                <select
-                                  value={mode}
-                                  onChange={(e) =>
-                                    updateWorkflowNodeConfig(selectedNode.id, {
-                                      mode: e.target.value,
-                                      sessions: e.target.value === "single" ? sessionsValue.slice(0, 1) : sessionsValue,
-                                    })
-                                  }
-                                >
-                                  <option value="single">Single account</option>
-                                  <option value="multi">Multi account</option>
-                                </select>
-                              </label>
-                              {mode === "single" ? (
-                                <label>
-                                  Session
-                                  <select
-                                    value={sessionsValue[0] || ""}
-                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { sessions: [e.target.value] })}
-                                  >
-                                    <option value="">Select session</option>
-                                    {sessionOptions.map((item) => (
-                                      <option key={item.name} value={item.name}>
-                                        {item.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                              ) : (
-                                <div className="checkbox-grid">
-                                  {sessionOptions.map((item) => (
-                                    <label key={item.name} className="checkbox">
-                                      <input
-                                        type="checkbox"
-                                        checked={sessionsValue.includes(item.name)}
-                                        onChange={() => {
-                                          const next = sessionsValue.includes(item.name)
-                                            ? sessionsValue.filter((value: string) => value !== item.name)
-                                            : [...sessionsValue, item.name];
-                                          updateWorkflowNodeConfig(selectedNode.id, { sessions: next });
-                                        }}
-                                      />
-                                      {item.name}
-                                    </label>
-                                  ))}
-                                </div>
-                              )}
-                            </>
-                          );
-                        }
-                        if (selectedNode.type === "wait") {
-                          return (
-                            <>
-                              <label>
-                                Min seconds
-                                <input
-                                  type="number"
-                                  value={config.min_seconds ?? 0}
-                                  onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { min_seconds: Number(e.target.value) || 0 })}
-                                />
-                              </label>
-                              <label>
-                                Max seconds
-                                <input
-                                  type="number"
-                                  value={config.max_seconds ?? 0}
-                                  onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { max_seconds: Number(e.target.value) || 0 })}
-                                />
-                              </label>
-                            </>
-                          );
-                        }
-                        if (selectedNode.type === "dm") {
-                          return (
-                            <>
-                              {renderPresetSelect()}
-                              {renderInputFile()}
-                              <label>
-                                Message
-                                <textarea
-                                  value={config.message ?? ""}
-                                  onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message: e.target.value })}
-                                />
-                              </label>
-                            </>
-                          );
-                        }
-                        if (selectedNode.type === "invite") {
-                          return (
-                            <>
-                              {renderPresetSelect()}
-                              {renderInputFile()}
-                              <label>
-                                Invite link
-                                <input
-                                  type="text"
-                                  value={config.invite_url ?? ""}
-                                  onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { invite_url: e.target.value })}
-                                />
-                              </label>
-                              <label>
-                                Message
-                                <textarea
-                                  value={config.message ?? ""}
-                                  onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message: e.target.value })}
-                                />
-                              </label>
-                            </>
-                          );
-                        }
-                        if (selectedNode.type === "bulk_add") {
-                          return (
-                            <>
-                              {renderPresetSelect()}
-                              {renderInputFile()}
-                              <label>
-                                Target group/channel
-                                <input
-                                  type="text"
-                                  value={config.target_ref ?? ""}
-                                  onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { target_ref: e.target.value })}
-                                />
-                              </label>
-                            </>
-                          );
-                        }
-                        if (selectedNode.type === "forward") {
-                          return (
-                            <>
-                              {renderPresetSelect()}
-                              {renderInputFile()}
-                              <label>
-                                Message link
-                                <input
-                                  type="text"
-                                  value={config.message_link ?? ""}
-                                  onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message_link: e.target.value })}
-                                />
-                              </label>
-                              <label>
-                                Source peer (optional)
-                                <input
-                                  type="text"
-                                  value={config.source_peer ?? ""}
-                                  onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { source_peer: e.target.value })}
-                                />
-                              </label>
-                              <label>
-                                Message id (optional)
-                                <input
-                                  type="text"
-                                  value={config.message_id ?? ""}
-                                  onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message_id: e.target.value })}
-                                />
-                              </label>
-                              <label className="toggle">
-                                <input
-                                  type="checkbox"
-                                  checked={Boolean(config.drop_author)}
-                                  onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { drop_author: e.target.checked })}
-                                />
-                                Drop forward author
-                              </label>
-                            </>
-                          );
-                        }
-                        if (selectedNode.type === "warmup") {
-                          return (
-                            <>
-                              {renderPresetSelect()}
-                              {renderInputFile()}
-                              <label>
-                                Targets
-                                <input
-                                  type="text"
-                                  value={config.targets ?? ""}
-                                  onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { targets: e.target.value })}
-                                />
-                              </label>
-                            </>
-                          );
-                        }
-                        if (selectedNode.type === "loop") {
-                          return (
-                            <label>
-                              Max cycles (0 = infinite)
-                              <input
-                                type="number"
-                                value={config.max_cycles ?? ""}
-                                onChange={(e) =>
-                                  updateWorkflowNodeConfig(selectedNode.id, { max_cycles: Number(e.target.value) || 0 })
-                                }
-                              />
-                            </label>
-                          );
-                        }
-                        return null;
-                      })()}
-                    </div>
-                  </div>
-                )}
-              </div>
+                          <label>
+                            Max seconds
+                            <input
+                              type="number"
+                              value={config.max_seconds ?? 0}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { max_seconds: Number(e.target.value) || 0 })}
+                            />
+                          </label>
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "dm") {
+                      return (
+                        <>
+                          {renderPresetSelect(presetNames)}
+                          {renderInputFile()}
+                          {renderRepeat()}
+                          <label>
+                            Message
+                            <textarea
+                              value={config.message ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message: e.target.value })}
+                            />
+                          </label>
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "invite") {
+                      return (
+                        <>
+                          {renderPresetSelect(presetNames)}
+                          {renderInputFile()}
+                          {renderRepeat()}
+                          <label>
+                            Invite link
+                            <input
+                              type="text"
+                              value={config.invite_url ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { invite_url: e.target.value })}
+                            />
+                          </label>
+                          <label>
+                            Message
+                            <textarea
+                              value={config.message ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message: e.target.value })}
+                            />
+                          </label>
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "bulk_add") {
+                      return (
+                        <>
+                          {renderPresetSelect(presetNames)}
+                          {renderInputFile()}
+                          {renderRepeat()}
+                          <label>
+                            Target group/channel
+                            <input
+                              type="text"
+                              value={config.target_ref ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { target_ref: e.target.value })}
+                            />
+                          </label>
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "forward") {
+                      return (
+                        <>
+                          {renderPresetSelect(presetNames)}
+                          {renderInputFile()}
+                          {renderRepeat()}
+                          <label>
+                            Message link
+                            <input
+                              type="text"
+                              value={config.message_link ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message_link: e.target.value })}
+                            />
+                          </label>
+                          <label>
+                            Source peer (optional)
+                            <input
+                              type="text"
+                              value={config.source_peer ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { source_peer: e.target.value })}
+                            />
+                          </label>
+                          <label>
+                            Message id (optional)
+                            <input
+                              type="text"
+                              value={config.message_id ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message_id: e.target.value })}
+                            />
+                          </label>
+                          <label className="toggle">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(config.drop_author)}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { drop_author: e.target.checked })}
+                            />
+                            Drop forward author
+                          </label>
+                        </>
+                      );
+                    }
+                    if (selectedNode.type === "warmup") {
+                      return (
+                        <>
+                          {renderPresetSelect(warmupPresetNames)}
+                          {renderInputFile()}
+                          {renderRepeat()}
+                          <label>
+                            Targets
+                            <input
+                              type="text"
+                              value={config.targets ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { targets: e.target.value })}
+                            />
+                          </label>
+                        </>
+                      );
+                    }
+                    return null;
+                  })()}
+                </div>
+              ) : (
+                <p className="muted">Select a node to edit its settings.</p>
+              )}
             </div>
           </div>
         </section>
@@ -2282,9 +2762,12 @@ function App() {
           <div className="panel">
             <div className="panel-header">
               <h3>Warmup</h3>
-              <span className="hint">Light activity to keep account warm</span>
+              <span className="hint">Group-only warmup with AI context</span>
             </div>
             <div className="form-grid">
+              <p className="hint">
+                Uses last 20 messages and replies only if the latest non‑self message is within 24h.
+              </p>
               <label>
                 Session
                 <select value={warmupForm.session} onChange={(e) => setWarmupForm({ ...warmupForm, session: e.target.value })}>
@@ -2297,81 +2780,53 @@ function App() {
                 </select>
               </label>
               <label>
-                Targets (comma-separated)
+                Targets (group @usernames)
                 <input
                   type="text"
                   value={warmupForm.targets}
                   onChange={(e) => setWarmupForm({ ...warmupForm, targets: e.target.value })}
-                  placeholder="me, @username"
+                  placeholder="@group1, @group2"
                 />
               </label>
               <label>
-                Message
-                <textarea
-                  value={warmupForm.message}
-                  onChange={(e) => setWarmupForm({ ...warmupForm, message: e.target.value })}
-                  rows={3}
-                />
+                Warmup preset
+                <select
+                  value={warmupForm.preset_name}
+                  onChange={(e) => setWarmupForm({ ...warmupForm, preset_name: e.target.value })}
+                >
+                  <option value="">Select warmup preset</option>
+                  {warmupPresets.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
               </label>
-              <label>
-                Total messages
-                <input
-                  type="number"
-                  value={warmupForm.total_messages}
-                  onChange={(e) => setWarmupForm({ ...warmupForm, total_messages: e.target.value })}
-                />
-              </label>
-              <label>
-                Min delay (sec)
-                <input
-                  type="number"
-                  value={warmupForm.min_delay}
-                  onChange={(e) => setWarmupForm({ ...warmupForm, min_delay: e.target.value })}
-                />
-              </label>
-              <label>
-                Max delay (sec)
-                <input
-                  type="number"
-                  value={warmupForm.max_delay}
-                  onChange={(e) => setWarmupForm({ ...warmupForm, max_delay: e.target.value })}
-                />
-              </label>
-              <label>
-                Max wait on rate limit (sec)
-                <input
-                  type="number"
-                  value={warmupForm.max_wait_seconds}
-                  onChange={(e) => setWarmupForm({ ...warmupForm, max_wait_seconds: e.target.value })}
-                />
-              </label>
-              <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={warmupForm.use_spintax}
-                    onChange={(e) => setWarmupForm({ ...warmupForm, use_spintax: e.target.checked })}
-                  />
-                  Spintax
-                </label>
-              </div>
               <button
                 className="primary"
-                onClick={() =>
+                onClick={() => {
+                  if (!warmupForm.session) {
+                    setError("Select a session for warmup");
+                    return;
+                  }
+                  const targets = parseTargets(warmupForm.targets).filter((t) => t !== "me");
+                  if (targets.length === 0) {
+                    setError("Warmup targets must be group usernames");
+                    return;
+                  }
+                  if (!warmupForm.preset_name) {
+                    setError("Select a warmup preset");
+                    return;
+                  }
                   handleJobStart(
                     "Warmup",
                     api.startWarmup({
                       session: warmupForm.session,
-                      targets: parseTargets(warmupForm.targets),
-                      message: warmupForm.message || undefined,
-                      use_spintax: warmupForm.use_spintax,
-                      total_messages: toInt(warmupForm.total_messages, 12),
-                      min_delay: toInt(warmupForm.min_delay, 600),
-                      max_delay: toInt(warmupForm.max_delay, 1800),
-                      max_wait_seconds: toInt(warmupForm.max_wait_seconds, 3600),
+                      targets,
+                      preset_name: warmupForm.preset_name,
                     })
-                  )
-                }
+                  );
+                }}
               >
                 Start Warmup
               </button>
@@ -2798,83 +3253,54 @@ function App() {
           <div className="panel">
             <div className="panel-header">
               <h3>Multi Warmup</h3>
-              <span className="hint">Light warmup across selected sessions</span>
+              <span className="hint">Group-only warmup across selected sessions</span>
             </div>
             <div className="form-grid">
+              <p className="hint">
+                Uses last 20 messages and replies only if the latest non‑self message is within 24h.
+              </p>
               <label>
-                Targets (comma-separated)
+                Targets (group @usernames)
                 <input
                   type="text"
                   value={multiWarmupForm.targets}
                   onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, targets: e.target.value })}
-                  placeholder="me, @username"
+                  placeholder="@group1, @group2"
                 />
               </label>
               <label>
-                Message
-                <textarea
-                  value={multiWarmupForm.message}
-                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, message: e.target.value })}
-                  rows={3}
-                />
+                Warmup preset
+                <select
+                  value={multiWarmupForm.preset_name}
+                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, preset_name: e.target.value })}
+                >
+                  <option value="">Select warmup preset</option>
+                  {warmupPresets.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
               </label>
-              <label>
-                Total messages (per session)
-                <input
-                  type="number"
-                  value={multiWarmupForm.total_messages}
-                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, total_messages: e.target.value })}
-                />
-              </label>
-              <label>
-                Min delay (sec)
-                <input
-                  type="number"
-                  value={multiWarmupForm.min_delay}
-                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, min_delay: e.target.value })}
-                />
-              </label>
-              <label>
-                Max delay (sec)
-                <input
-                  type="number"
-                  value={multiWarmupForm.max_delay}
-                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, max_delay: e.target.value })}
-                />
-              </label>
-              <label>
-                Max wait on rate limit (sec)
-                <input
-                  type="number"
-                  value={multiWarmupForm.max_wait_seconds}
-                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, max_wait_seconds: e.target.value })}
-                />
-              </label>
-              <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={multiWarmupForm.use_spintax}
-                    onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, use_spintax: e.target.checked })}
-                  />
-                  Spintax
-                </label>
-              </div>
               <button
                 className="primary"
                 onClick={() => {
                   if (!ensureMultiSessions()) return;
+                  const targets = parseTargets(multiWarmupForm.targets).filter((t) => t !== "me");
+                  if (targets.length === 0) {
+                    setError("Warmup targets must be group usernames");
+                    return;
+                  }
+                  if (!multiWarmupForm.preset_name) {
+                    setError("Select a warmup preset");
+                    return;
+                  }
                   handleJobStart(
                     "Multi warmup",
                     api.startMultiWarmup({
                       sessions: selectedMultiSessions,
-                      targets: parseTargets(multiWarmupForm.targets),
-                      message: multiWarmupForm.message || undefined,
-                      use_spintax: multiWarmupForm.use_spintax,
-                      total_messages: toInt(multiWarmupForm.total_messages, 12),
-                      min_delay: toInt(multiWarmupForm.min_delay, 600),
-                      max_delay: toInt(multiWarmupForm.max_delay, 1800),
-                      max_wait_seconds: toInt(multiWarmupForm.max_wait_seconds, 3600),
+                      targets,
+                      preset_name: multiWarmupForm.preset_name,
                     })
                   );
                 }}
@@ -2901,17 +3327,29 @@ function App() {
           ) : (
             <div className="job-list">
               {jobs.map((job) => (
-                <div key={job.id} className="job-card">
+                <div key={job.id} className="job-card" onClick={() => setSelectedJobId(job.id)}>
                   <div>
                     <h4>{job.type}</h4>
                     <p className="meta">{job.id}</p>
                     <p className="meta">Status: {job.status}</p>
+                    {job.error && <p className="meta error">Error: {job.error}</p>}
                   </div>
                   <div className="job-actions">
+                    <button
+                      className="ghost"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedJobId(job.id);
+                        setActiveTab("logs");
+                      }}
+                    >
+                      View logs
+                    </button>
                     {job.status === "running" && (
                       <button
                         className="danger"
-                        onClick={async () => {
+                        onClick={async (e) => {
+                          e.stopPropagation();
                           try {
                             await api.stopJob(job.id);
                             updateNotice(`Stopped ${job.id}`);
@@ -2935,6 +3373,28 @@ function App() {
 
       {showLogs && (
       <section className="section logs">
+        <div className="panel">
+          <div className="panel-header">
+            <h3>Log Source</h3>
+            <button className="ghost" onClick={refreshLogs}>Refresh</button>
+          </div>
+          <div className="form-grid">
+            <label>
+              Job
+              <select value={selectedJobId} onChange={(e) => setSelectedJobId(e.target.value)}>
+                <option value="">Latest</option>
+                {jobs
+                  .slice()
+                  .sort((a, b) => (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || ""))
+                  .map((job) => (
+                    <option key={job.id} value={job.id}>
+                      {job.id} ({job.type})
+                    </option>
+                  ))}
+              </select>
+            </label>
+          </div>
+        </div>
         <div className="panel">
           <div className="panel-header">
             <h3>Actions Log</h3>

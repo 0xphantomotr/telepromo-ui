@@ -463,11 +463,12 @@ select option {
 
 .workflow-layout {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 220px minmax(0, 1fr) 220px;
   gap: 20px;
   align-items: start;
-  width: calc(100% + 240px);
-  margin-left: -240px;
+  width: calc(100% + 440px);
+  margin-left: -220px;
+  margin-right: -220px;
 }
 
 .workflow-buttons {
@@ -622,6 +623,7 @@ select option {
     grid-template-columns: 1fr;
     width: 100%;
     margin-left: 0;
+    margin-right: 0;
   }
 }
 
@@ -656,4 +658,19 @@ select option {
 .workflow-palette {
   position: sticky;
   top: 18px;
+}
+
+.workflow-inspector {
+  position: sticky;
+  top: 18px;
+}
+
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type=number] {
+  -moz-appearance: textfield;
 }
