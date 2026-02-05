@@ -27,6 +27,22 @@ type JobItem = {
   result?: Record<string, unknown>;
 };
 
+type AiProfile = {
+  id: string;
+  label?: string | null;
+  provider: string;
+  has_key: boolean;
+  model?: string | null;
+};
+
+type AiProfileForm = {
+  id?: string;
+  label: string;
+  provider: string;
+  api_key: string;
+  model: string;
+};
+
 type CommonOptions = {
   use_spintax: boolean;
   media_path: string;
@@ -95,6 +111,10 @@ type PresetItem = {
   min_delay?: number | null;
   max_delay?: number | null;
   total_messages?: number | null;
+  warmup_mode?: string | null;
+  warmup_modes?: string[] | null;
+  context_messages?: number | null;
+  ai_profile_id?: string | null;
 };
 
 type PresetForm = {
@@ -109,6 +129,9 @@ type PresetForm = {
   min_delay: string;
   max_delay: string;
   total_messages: string;
+  warmup_modes: string[];
+  context_messages: string;
+  ai_profile_id: string;
 };
 
 type SessionProxyForm = {
@@ -216,6 +239,9 @@ const defaultPresetForm: PresetForm = {
   min_delay: "600",
   max_delay: "1800",
   total_messages: "12",
+  warmup_modes: ["reply"],
+  context_messages: "50",
+  ai_profile_id: "",
 };
 
 const defaultProxyForm: SessionProxyForm = {
@@ -268,10 +294,15 @@ function App() {
   const [healthMessage, setHealthMessage] = useState("Checking backend...");
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [proxyForm, setProxyForm] = useState<SessionProxyForm>(defaultProxyForm);
-  const [aiProvider, setAiProvider] = useState("openai");
-  const [aiKey, setAiKey] = useState("");
-  const [aiHasKey, setAiHasKey] = useState(false);
-  const [aiModel, setAiModel] = useState("");
+  const [aiProfiles, setAiProfiles] = useState<AiProfile[]>([]);
+  const [aiDefaultId, setAiDefaultId] = useState("");
+  const [aiProfileForm, setAiProfileForm] = useState<AiProfileForm>({
+    label: "",
+    provider: "openai",
+    api_key: "",
+    model: "",
+  });
+  const [aiEditingId, setAiEditingId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string>("");
   const selectedJobRef = useRef<string>("");
@@ -333,6 +364,7 @@ function App() {
   );
 
   const presetOptions = useMemo(() => dmPresets, [dmPresets]);
+  const aiReadyProfiles = useMemo(() => aiProfiles.filter((profile) => profile.has_key), [aiProfiles]);
 
   const nodeLookup = useMemo(
     () => new Map(workflowDraft.nodes.map((node) => [node.id, node])),
@@ -527,50 +559,132 @@ function App() {
   const loadAiSettings = async () => {
     try {
       const res = await api.aiSettings();
-      const provider = res.provider || "openai";
-      setAiProvider(provider);
-      const fallbackModel =
-        provider === "gemini"
-          ? "gemini-2.5-flash"
-          : provider === "groq"
-          ? "llama-3.1-8b-instant"
-          : "gpt-4o-mini";
-      setAiModel(res.model || fallbackModel);
-      setAiHasKey(Boolean(res.has_key));
+      setAiProfiles(res.profiles || []);
+      setAiDefaultId(res.default_id || "");
     } catch (err: any) {
       setError(err.message || "Failed to load AI settings");
     }
   };
 
-  const handleSaveAiSettings = async () => {
-    if (!aiKey.trim()) {
-      setError("Enter an API key to save");
+  const resetAiProfileForm = () => {
+    setAiProfileForm({
+      label: "",
+      provider: "openai",
+      api_key: "",
+      model: "",
+    });
+    setAiEditingId(null);
+  };
+
+  const handleEditAiProfile = (profile: AiProfile) => {
+    setAiEditingId(profile.id);
+    setAiProfileForm({
+      id: profile.id,
+      label: profile.label || "",
+      provider: profile.provider,
+      api_key: "",
+      model: profile.model || "",
+    });
+  };
+
+  const handleSaveAiProfile = async () => {
+    setError(null);
+    const provider = aiProfileForm.provider.trim();
+    if (!provider) {
+      setError("Select a provider");
       return;
     }
-    try {
-      const modelValue = aiProvider === "openai" ? null : aiModel.trim() || null;
-      const res = await api.saveAiSettings({
-        provider: aiProvider,
-        api_key: aiKey.trim(),
-        model: modelValue,
+    const label = aiProfileForm.label.trim();
+    const model = aiProfileForm.model.trim();
+    const apiKey = aiProfileForm.api_key.trim();
+
+    const payloadProfiles = aiProfiles.map((profile) => ({
+      id: profile.id,
+      label: profile.label || "",
+      provider: profile.provider,
+      api_key: null,
+      model: profile.model || null,
+    }));
+
+    if (aiEditingId) {
+      const idx = payloadProfiles.findIndex((item) => item.id === aiEditingId);
+      const nextProfile = {
+        id: aiEditingId,
+        label: label || payloadProfiles[idx]?.label || provider.toUpperCase(),
+        provider,
+        model: model || null,
+        api_key: apiKey || null,
+      };
+      if (idx >= 0) {
+        payloadProfiles[idx] = nextProfile;
+      } else {
+        payloadProfiles.push(nextProfile);
+      }
+    } else {
+      payloadProfiles.push({
+        label: label || provider.toUpperCase(),
+        provider,
+        model: model || null,
+        api_key: apiKey || null,
       });
-      setAiHasKey(Boolean(res.has_key));
-      setAiKey("");
-      updateNotice("AI key saved");
+    }
+
+    try {
+      await api.saveAiSettings({
+        profiles: payloadProfiles,
+        default_id: aiDefaultId || undefined,
+      });
+      updateNotice(aiEditingId ? "AI profile updated" : "AI profile added");
+      resetAiProfileForm();
+      loadAiSettings();
     } catch (err: any) {
-      setError(err.message || "Failed to save AI key");
+      setError(err.message || "Failed to save AI profile");
     }
   };
 
-  const handleClearAiSettings = async () => {
+  const handleDeleteAiProfile = async (profileId: string) => {
+    const payloadProfiles = aiProfiles
+      .filter((profile) => profile.id !== profileId)
+      .map((profile) => ({
+        id: profile.id,
+        label: profile.label || "",
+        provider: profile.provider,
+        api_key: null,
+        model: profile.model || null,
+      }));
+    const nextDefault = aiDefaultId === profileId ? "" : aiDefaultId;
     try {
-      const modelValue = aiProvider === "openai" ? null : aiModel.trim() || null;
-      const res = await api.saveAiSettings({ provider: aiProvider, api_key: "", model: modelValue });
-      setAiHasKey(Boolean(res.has_key));
-      setAiKey("");
-      updateNotice("AI key cleared");
+      await api.saveAiSettings({
+        profiles: payloadProfiles,
+        default_id: nextDefault || undefined,
+      });
+      updateNotice("AI profile deleted");
+      if (aiEditingId === profileId) {
+        resetAiProfileForm();
+      }
+      loadAiSettings();
     } catch (err: any) {
-      setError(err.message || "Failed to clear AI key");
+      setError(err.message || "Failed to delete AI profile");
+    }
+  };
+
+  const handleSetDefaultAiProfile = async (profileId: string) => {
+    const payloadProfiles = aiProfiles.map((profile) => ({
+      id: profile.id,
+      label: profile.label || "",
+      provider: profile.provider,
+      api_key: null,
+      model: profile.model || null,
+    }));
+    try {
+      await api.saveAiSettings({
+        profiles: payloadProfiles,
+        default_id: profileId,
+      });
+      setAiDefaultId(profileId);
+      updateNotice("Default AI profile updated");
+    } catch (err: any) {
+      setError(err.message || "Failed to set default AI profile");
     }
   };
 
@@ -705,6 +819,34 @@ function App() {
     setWarmupForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstWarmup }));
     setMultiWarmupForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstWarmup }));
   }, [warmupPresets]);
+
+  useEffect(() => {
+    if (presetForm.kind !== "warmup") {
+      return;
+    }
+    const hasAiProfiles = aiReadyProfiles.length > 0;
+    const currentModes = presetForm.warmup_modes || [];
+    if (!hasAiProfiles) {
+      if (currentModes.length !== 1 || currentModes[0] !== "react") {
+        setPresetForm((prev) => ({ ...prev, warmup_modes: ["react"], ai_profile_id: "" }));
+      }
+      return;
+    }
+    if (currentModes.length === 0) {
+      setPresetForm((prev) => ({ ...prev, warmup_modes: ["reply"] }));
+      return;
+    }
+    const needsAiProfile = currentModes.some((mode) => mode === "reply" || mode === "message");
+    if (needsAiProfile && !presetForm.ai_profile_id) {
+      const fallback = aiDefaultId || aiReadyProfiles[0]?.id;
+      if (fallback) {
+        setPresetForm((prev) => ({ ...prev, ai_profile_id: fallback }));
+      }
+    }
+    if (!needsAiProfile && presetForm.ai_profile_id) {
+      setPresetForm((prev) => ({ ...prev, ai_profile_id: "" }));
+    }
+  }, [aiReadyProfiles, aiDefaultId, presetForm.kind, presetForm.warmup_modes, presetForm.ai_profile_id]);
 
   useEffect(() => {
     if (!draggingNode) return;
@@ -1119,6 +1261,15 @@ function App() {
         payload.max_delay = toInt(presetForm.max_delay, 1800);
         payload.total_messages = toInt(presetForm.total_messages, 12);
         payload.max_wait_seconds = toInt(presetForm.max_wait_seconds, 3600);
+        const warmupModes = presetForm.warmup_modes.length ? presetForm.warmup_modes : ["reply"];
+        payload.warmup_modes = warmupModes;
+        payload.context_messages = toInt(presetForm.context_messages, 50);
+        if (warmupModes.some((mode) => mode === "reply" || mode === "message")) {
+          const fallbackProfile = aiDefaultId || aiReadyProfiles[0]?.id;
+          payload.ai_profile_id = presetForm.ai_profile_id || fallbackProfile || undefined;
+        } else {
+          payload.ai_profile_id = undefined;
+        }
       } else {
         payload.interval_seconds = toInt(presetForm.interval_seconds, 600);
         payload.strict_timing = presetForm.strict_timing;
@@ -1153,6 +1304,14 @@ function App() {
       min_delay: String(preset.min_delay ?? defaultPresetForm.min_delay),
       max_delay: String(preset.max_delay ?? defaultPresetForm.max_delay),
       total_messages: String(preset.total_messages ?? defaultPresetForm.total_messages),
+      warmup_modes:
+        preset.warmup_modes && preset.warmup_modes.length
+          ? preset.warmup_modes
+          : preset.warmup_mode
+          ? [preset.warmup_mode]
+          : defaultPresetForm.warmup_modes,
+      context_messages: String(preset.context_messages ?? defaultPresetForm.context_messages),
+      ai_profile_id: preset.ai_profile_id ?? defaultPresetForm.ai_profile_id,
     });
   };
 
@@ -1278,6 +1437,27 @@ function App() {
 
   const clearSessions = () => {
     setMultiSessions([]);
+  };
+
+  const toggleWarmupMode = (mode: string) => {
+    setPresetForm((prev) => {
+      const next = new Set(prev.warmup_modes);
+      if (next.has(mode)) {
+        next.delete(mode);
+      } else {
+        next.add(mode);
+      }
+      if (next.size === 0) {
+        next.add(mode);
+      }
+      const modes = Array.from(next);
+      const needsAi = modes.some((item) => item === "reply" || item === "message");
+      return {
+        ...prev,
+        warmup_modes: modes,
+        ai_profile_id: needsAi ? prev.ai_profile_id : "",
+      };
+    });
   };
 
   return (
@@ -1539,65 +1719,101 @@ function App() {
 
           <div className="panel">
             <div className="panel-header">
-              <h3>AI API Keys</h3>
-              <span className="hint">Global key for spintax / warmup</span>
+              <h3>AI Profiles</h3>
+              <span className="hint">Store multiple providers + models for warmup</span>
+            </div>
+            <div className="session-list">
+              {aiProfiles.length === 0 && <p className="muted">No AI profiles saved yet.</p>}
+              {aiProfiles.map((profile) => (
+                <div key={profile.id} className="session-card">
+                  <div>
+                    <h4>{profile.label || profile.provider}</h4>
+                    <p className="meta">
+                      {profile.provider}
+                      {profile.model ? ` • ${profile.model}` : ""}
+                    </p>
+                    <p className="meta">
+                      {profile.has_key ? "Key saved" : "No key"}
+                      {aiDefaultId === profile.id ? " • Default" : ""}
+                    </p>
+                  </div>
+                  <div className="row">
+                    <button className="ghost" onClick={() => handleEditAiProfile(profile)}>
+                      Edit
+                    </button>
+                    <button
+                      className="ghost"
+                      onClick={() => handleSetDefaultAiProfile(profile.id)}
+                      disabled={aiDefaultId === profile.id}
+                    >
+                      {aiDefaultId === profile.id ? "Default" : "Set default"}
+                    </button>
+                    <button className="danger" onClick={() => handleDeleteAiProfile(profile.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="panel-header" style={{ marginTop: "16px" }}>
+              <h3>{aiEditingId ? "Edit profile" : "Add profile"}</h3>
+              <span className="hint">Leave API key blank to keep current</span>
             </div>
             <div className="form-grid">
               <label>
+                Label
+                <input
+                  type="text"
+                  value={aiProfileForm.label}
+                  onChange={(e) => setAiProfileForm({ ...aiProfileForm, label: e.target.value })}
+                  placeholder="OpenAI main"
+                />
+              </label>
+              <label>
                 Provider
                 <select
-                  value={aiProvider}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setAiProvider(next);
-                    const nextModel =
-                      next === "gemini"
-                        ? "gemini-2.5-flash"
-                        : next === "groq"
-                        ? "llama-3.1-8b-instant"
-                        : "gpt-4o-mini";
-                    setAiModel(nextModel);
-                  }}
+                  value={aiProfileForm.provider}
+                  onChange={(e) => setAiProfileForm({ ...aiProfileForm, provider: e.target.value })}
                 >
                   <option value="openai">OpenAI</option>
                   <option value="gemini">Gemini</option>
                   <option value="groq">Groq</option>
                 </select>
               </label>
-              {aiProvider !== "openai" && (
-                <label>
-                  Model
-                  <input
-                    type="text"
-                    value={aiModel}
-                    onChange={(e) => setAiModel(e.target.value)}
-                    placeholder={aiProvider === "groq" ? "llama-3.1-8b-instant" : "gemini-2.5-flash"}
-                  />
-                  <span className="hint">
-                    {aiProvider === "groq"
-                      ? "Use a supported Groq model, e.g. llama-3.1-8b-instant."
-                      : "Use a supported Gemini model, e.g. gemini-2.5-flash."}
-                  </span>
-                </label>
-              )}
+              <label>
+                Model
+                <input
+                  type="text"
+                  value={aiProfileForm.model}
+                  onChange={(e) => setAiProfileForm({ ...aiProfileForm, model: e.target.value })}
+                  placeholder={
+                    aiProfileForm.provider === "groq"
+                      ? "llama-3.1-8b-instant"
+                      : aiProfileForm.provider === "gemini"
+                      ? "gemini-2.5-flash"
+                      : "gpt-4o-mini"
+                  }
+                />
+              </label>
               <label>
                 API key
                 <input
                   type="password"
-                  value={aiKey}
-                  onChange={(e) => setAiKey(e.target.value)}
-                  placeholder={aiHasKey ? "Saved (enter to replace)" : "Paste your API key"}
+                  value={aiProfileForm.api_key}
+                  onChange={(e) => setAiProfileForm({ ...aiProfileForm, api_key: e.target.value })}
+                  placeholder={aiEditingId ? "Leave blank to keep existing key" : "Paste your API key"}
                 />
               </label>
               <div className="row">
-                <button className="primary" onClick={handleSaveAiSettings}>
-                  Save key
+                <button className="primary" onClick={handleSaveAiProfile}>
+                  {aiEditingId ? "Update profile" : "Add profile"}
                 </button>
-                <button className="ghost" onClick={handleClearAiSettings}>
-                  Clear key
-                </button>
+                {aiEditingId && (
+                  <button className="ghost" onClick={resetAiProfileForm}>
+                    Cancel
+                  </button>
+                )}
               </div>
-              {aiHasKey && <p className="hint">A key is stored for {aiProvider}.</p>}
             </div>
           </div>
         </div>
@@ -1729,6 +1945,66 @@ function App() {
                   </div>
                   <div className="row">
                     <label>
+                      Warmup modes
+                      <div className="toggles">
+                        <label className="toggle">
+                          <input
+                            type="checkbox"
+                            checked={presetForm.warmup_modes.includes("react")}
+                            onChange={() => toggleWarmupMode("react")}
+                          />
+                          React
+                        </label>
+                        <label className="toggle">
+                          <input
+                            type="checkbox"
+                            checked={presetForm.warmup_modes.includes("reply")}
+                            onChange={() => toggleWarmupMode("reply")}
+                            disabled={aiReadyProfiles.length === 0}
+                          />
+                          Reply
+                        </label>
+                        <label className="toggle">
+                          <input
+                            type="checkbox"
+                            checked={presetForm.warmup_modes.includes("message")}
+                            onChange={() => toggleWarmupMode("message")}
+                            disabled={aiReadyProfiles.length === 0}
+                          />
+                          Message
+                        </label>
+                      </div>
+                    </label>
+                    <label>
+                      Context size (last messages)
+                      <input
+                        type="number"
+                        value={presetForm.context_messages}
+                        onChange={(e) => setPresetForm({ ...presetForm, context_messages: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                  {presetForm.warmup_modes.some((mode) => mode === "reply" || mode === "message") && (
+                    <label>
+                      AI profile
+                      <select
+                        value={presetForm.ai_profile_id}
+                        onChange={(e) => setPresetForm({ ...presetForm, ai_profile_id: e.target.value })}
+                      >
+                        <option value="">Use default</option>
+                        {aiReadyProfiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.label || profile.provider} {profile.model ? `(${profile.model})` : ""}
+                          </option>
+                        ))}
+                      </select>
+                      {aiReadyProfiles.length === 0 && (
+                        <span className="hint">No AI profiles with keys saved. Warmup will react only.</span>
+                      )}
+                    </label>
+                  )}
+                  <div className="row">
+                    <label>
                       Max wait (sec)
                       <input
                         type="number"
@@ -1782,7 +2058,13 @@ function App() {
                   <div>
                     <h4>{preset.name}</h4>
                     <p className="meta">
-                      Total {preset.total_messages ?? 0} • {preset.min_delay ?? 0}-{preset.max_delay ?? 0}s
+                      Total {preset.total_messages ?? 0} • {preset.min_delay ?? 0}-{preset.max_delay ?? 0}s • Modes{" "}
+                      {(preset.warmup_modes && preset.warmup_modes.length
+                        ? preset.warmup_modes
+                        : preset.warmup_mode
+                        ? [preset.warmup_mode]
+                        : ["reply"]
+                      ).join(", ")}
                     </p>
                   </div>
                   <div className="row">
@@ -2782,7 +3064,7 @@ function App() {
             </div>
             <div className="form-grid">
               <p className="hint">
-                Uses last 20 messages and replies only if the latest non‑self message is within 24h.
+                Warmup mode is defined by the preset (React / Reply / Message). Uses the last 50 messages for context and falls back to reactions if no AI profile is available.
               </p>
               <label>
                 Session
@@ -3273,7 +3555,7 @@ function App() {
             </div>
             <div className="form-grid">
               <p className="hint">
-                Uses last 20 messages and replies only if the latest non‑self message is within 24h.
+                Warmup mode is defined by the preset (React / Reply / Message). Uses the last 50 messages for context and falls back to reactions if no AI profile is available.
               </p>
               <label>
                 Targets (group @usernames)

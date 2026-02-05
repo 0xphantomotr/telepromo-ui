@@ -89,6 +89,10 @@ export const api = {
       min_delay?: number | null;
       max_delay?: number | null;
       total_messages?: number | null;
+      warmup_mode?: string | null;
+      warmup_modes?: string[] | null;
+      context_messages?: number | null;
+      ai_profile_id?: string | null;
     }> }>(kind ? `/presets?kind=${encodeURIComponent(kind)}` : "/presets"),
   savePreset: (payload: {
     name: string;
@@ -102,6 +106,10 @@ export const api = {
     min_delay?: number | null;
     max_delay?: number | null;
     total_messages?: number | null;
+    warmup_mode?: string | null;
+    warmup_modes?: string[] | null;
+    context_messages?: number | null;
+    ai_profile_id?: string | null;
   }) =>
     request<{ ok: boolean; preset: Record<string, unknown> }>("/presets", {
       method: "POST",
@@ -112,9 +120,27 @@ export const api = {
       method: "DELETE",
     }),
   aiSettings: () =>
-    request<{ provider?: string | null; has_key?: boolean; model?: string | null }>("/settings/ai"),
-  saveAiSettings: (payload: { provider: string; api_key?: string | null; model?: string | null }) =>
-    request<{ ok: boolean; provider: string; has_key: boolean; model?: string | null }>("/settings/ai", {
+    request<{
+      profiles: Array<{
+        id: string;
+        label?: string | null;
+        provider: string;
+        has_key: boolean;
+        model?: string | null;
+      }>;
+      default_id?: string | null;
+    }>("/settings/ai"),
+  saveAiSettings: (payload: {
+    profiles: Array<{
+      id?: string;
+      label?: string | null;
+      provider: string;
+      api_key?: string | null;
+      model?: string | null;
+    }>;
+    default_id?: string | null;
+  }) =>
+    request<{ ok: boolean; profiles: Array<Record<string, unknown>>; default_id?: string | null }>("/settings/ai", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
@@ -287,6 +313,9 @@ export const api = {
     min_delay?: number;
     max_delay?: number;
     max_wait_seconds?: number;
+    warmup_mode?: string;
+    context_messages?: number;
+    ai_profile_id?: string;
   }) =>
     request<{ job_id: string }>("/campaigns/warmup", {
       method: "POST",
@@ -409,6 +438,9 @@ export const api = {
     min_delay?: number;
     max_delay?: number;
     max_wait_seconds?: number;
+    warmup_mode?: string;
+    context_messages?: number;
+    ai_profile_id?: string;
   }) =>
     request<{ job_id: string }>("/campaigns/multi/warmup", {
       method: "POST",
