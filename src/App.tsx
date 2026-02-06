@@ -108,6 +108,8 @@ type PresetItem = {
   max_wait_seconds: number;
   max_flood_waits: number;
   max_consecutive_errors: number;
+  all_csv_users?: boolean | null;
+  max_users?: number | null;
   min_delay?: number | null;
   max_delay?: number | null;
   total_messages?: number | null;
@@ -126,6 +128,8 @@ type PresetForm = {
   max_wait_seconds: string;
   max_flood_waits: string;
   max_consecutive_errors: string;
+  all_csv_users: boolean;
+  max_users: string;
   min_delay: string;
   max_delay: string;
   total_messages: string;
@@ -236,6 +240,8 @@ const defaultPresetForm: PresetForm = {
   max_wait_seconds: "3600",
   max_flood_waits: "3",
   max_consecutive_errors: "5",
+  all_csv_users: true,
+  max_users: "",
   min_delay: "600",
   max_delay: "1800",
   total_messages: "12",
@@ -262,7 +268,7 @@ const defaultWorkflowDraft: WorkflowDraft = {
     {
       id: "session1",
       type: "session",
-      config: { mode: "single", sessions: [] },
+      config: { session: "", loop_count: 1 },
       position: { x: 40, y: 40 },
     },
   ],
@@ -926,6 +932,10 @@ function App() {
   };
 
   const addWorkflowNode = (type: string) => {
+    if (type === "session" && workflowDraft.nodes.some((node) => node.type === "session")) {
+      setError("Only one Session node is allowed in a humanistic loop.");
+      return;
+    }
     if (type !== "session" && !workflowDraft.nodes.some((node) => node.type === "session")) {
       setError("Add a Session node before adding other blocks.");
       return;
@@ -933,19 +943,19 @@ function App() {
     const id = `node_${type}_${Date.now()}`;
     let config: Record<string, unknown> = {};
     if (type === "session") {
-      config = { mode: "single", sessions: [] };
+      config = { session: "", loop_count: 1 };
     } else if (type === "wait") {
       config = { min_seconds: 600, max_seconds: 900 };
     } else if (type === "dm") {
-      config = { preset_name: presetNames[0] || "", message: "", input_file: "data/shqipo.csv", repeat_min: 1, repeat_max: 1 };
+      config = { preset_name: presetNames[0] || "", message: "", input_file: "data/shqipo.csv" };
     } else if (type === "invite") {
-      config = { preset_name: presetNames[0] || "", invite_url: "", message: "", input_file: "data/shqipo.csv", repeat_min: 1, repeat_max: 1 };
+      config = { preset_name: presetNames[0] || "", invite_url: "", message: "", input_file: "data/shqipo.csv" };
     } else if (type === "bulk_add") {
-      config = { preset_name: presetNames[0] || "", target_ref: "", input_file: "data/shqipo.csv", repeat_min: 1, repeat_max: 1 };
+      config = { preset_name: presetNames[0] || "", target_ref: "", input_file: "data/shqipo.csv" };
     } else if (type === "forward") {
-      config = { preset_name: presetNames[0] || "", message_link: "", drop_author: false, input_file: "data/shqipo.csv", repeat_min: 1, repeat_max: 1 };
+      config = { preset_name: presetNames[0] || "", message_link: "", drop_author: false, input_file: "data/shqipo.csv" };
     } else if (type === "warmup") {
-      config = { preset_name: warmupPresetNames[0] || "", targets: "me", input_file: "data/shqipo.csv", repeat_min: 1, repeat_max: 1 };
+      config = { preset_name: warmupPresetNames[0] || "", targets: "me" };
     }
 
     setWorkflowDraft((draft) => {
@@ -1061,13 +1071,18 @@ function App() {
     if (sessionNodes.length === 0) {
       errors.push("Add a Session node to start the workflow.");
     }
+    if (sessionNodes.length > 1) {
+      errors.push("Only one Session node is allowed in a humanistic loop.");
+    }
     sessionNodes.forEach((node) => {
       const config = node.config as Record<string, any>;
-      const sessions = Array.isArray(config.sessions)
-        ? config.sessions.filter((value: string) => value)
-        : [];
-      if (sessions.length === 0) {
-        errors.push(`Session node ${node.id} needs at least one account selected.`);
+      const session = typeof config.session === "string" ? config.session.trim() : "";
+      if (!session) {
+        errors.push(`Session node ${node.id} needs a session selected.`);
+      }
+      const loopCount = Number(config.loop_count ?? 1);
+      if (!Number.isFinite(loopCount) || loopCount < 1) {
+        errors.push(`Session node ${node.id} needs a valid loop count.`);
       }
     });
 
@@ -1083,16 +1098,8 @@ function App() {
         errors.push(`Action node ${node.id} (${node.type}) needs a preset.`);
       }
       const inputFile = typeof config.input_file === "string" ? config.input_file.trim() : "";
-      if (!inputFile) {
+      if (node.type !== "warmup" && !inputFile) {
         errors.push(`Action node ${node.id} (${node.type}) needs a CSV file.`);
-      }
-      const repeatMin = Number(config.repeat_min ?? 1);
-      const repeatMax = Number(config.repeat_max ?? 1);
-      if (!Number.isFinite(repeatMin) || repeatMin < 1) {
-        errors.push(`Action node ${node.id} (${node.type}) needs a valid repeat min.`);
-      }
-      if (!Number.isFinite(repeatMax) || repeatMax < repeatMin) {
-        errors.push(`Action node ${node.id} (${node.type}) needs a repeat max >= min.`);
       }
       if (node.type === "dm") {
         const message = typeof config.message === "string" ? config.message.trim() : "";
@@ -1183,10 +1190,23 @@ function App() {
   };
 
   const handleWorkflowLoad = (workflow: WorkflowItem) => {
-    const nodes = (workflow.nodes || []).map((node, idx) => ({
-      ...node,
-      position: node.position ?? { x: 40 + idx * 32, y: 40 + idx * 28 },
-    }));
+    const nodes = (workflow.nodes || []).map((node, idx) => {
+      const nextConfig = { ...(node.config || {}) } as Record<string, any>;
+      if (node.type === "session") {
+        if (!nextConfig.session) {
+          const sessionsValue = Array.isArray(nextConfig.sessions) ? nextConfig.sessions : [];
+          nextConfig.session = sessionsValue[0] || "";
+        }
+        if (nextConfig.loop_count === undefined || nextConfig.loop_count === null) {
+          nextConfig.loop_count = 1;
+        }
+      }
+      return {
+        ...node,
+        config: nextConfig,
+        position: node.position ?? { x: 40 + idx * 32, y: 40 + idx * 28 },
+      };
+    });
     const edges = (workflow.edges || []).map((edge, idx) => ({
       id: edge.id || `edge_${idx}_${edge.source}_${edge.target}`,
       source: edge.source,
@@ -1277,6 +1297,12 @@ function App() {
         payload.max_wait_seconds = toInt(presetForm.max_wait_seconds, 3600);
         payload.max_flood_waits = toInt(presetForm.max_flood_waits, 3);
         payload.max_consecutive_errors = toInt(presetForm.max_consecutive_errors, 5);
+        payload.all_csv_users = presetForm.all_csv_users;
+        if (presetForm.all_csv_users) {
+          payload.max_users = 0;
+        } else {
+          payload.max_users = toInt(presetForm.max_users, 0);
+        }
       }
       await api.savePreset(payload as any);
       updateNotice(`Preset saved: ${name}`);
@@ -1304,6 +1330,13 @@ function App() {
       min_delay: String(preset.min_delay ?? defaultPresetForm.min_delay),
       max_delay: String(preset.max_delay ?? defaultPresetForm.max_delay),
       total_messages: String(preset.total_messages ?? defaultPresetForm.total_messages),
+      all_csv_users:
+        preset.all_csv_users ??
+        (preset.max_users === null || preset.max_users === undefined || preset.max_users === 0),
+      max_users:
+        preset.max_users === null || preset.max_users === undefined || preset.max_users === 0
+          ? ""
+          : String(preset.max_users),
       warmup_modes:
         preset.warmup_modes && preset.warmup_modes.length
           ? preset.warmup_modes
@@ -1858,6 +1891,35 @@ function App() {
               {presetForm.kind === "dm" ? (
                 <>
                   <div className="row">
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={presetForm.all_csv_users}
+                        onChange={(e) =>
+                          setPresetForm({
+                            ...presetForm,
+                            all_csv_users: e.target.checked,
+                            max_users: e.target.checked ? "" : presetForm.max_users,
+                          })
+                        }
+                      />
+                      All CSV users
+                    </label>
+                    <label>
+                      Total users
+                      <input
+                        type="number"
+                        min={1}
+                        value={presetForm.max_users}
+                        onChange={(e) => setPresetForm({ ...presetForm, max_users: e.target.value })}
+                        disabled={presetForm.all_csv_users}
+                      />
+                    </label>
+                  </div>
+                  <p className="hint">
+                    Warning: for humanistic loops and in general, DMing too many users can risk bans.
+                  </p>
+                  <div className="row">
                     <label>
                       Interval (seconds)
                       <input
@@ -2033,7 +2095,8 @@ function App() {
                   <div>
                     <h4>{preset.name}</h4>
                     <p className="meta">
-                      Interval {preset.interval_seconds}s • Rate mode {preset.rate_mode}
+                      Interval {preset.interval_seconds}s • Rate mode {preset.rate_mode} • Users{" "}
+                      {preset.all_csv_users || !preset.max_users ? "all" : preset.max_users}
                     </p>
                   </div>
                   <div className="row">
@@ -2092,7 +2155,7 @@ function App() {
                 <span className="hint">Build your loop</span>
               </div>
               <div className="workflow-buttons">
-                <button className="ghost" onClick={() => addWorkflowNode("session")}>
+                <button className="ghost" disabled={workflowHasSession} onClick={() => addWorkflowNode("session")}>
                   Session
                 </button>
                 <button className="ghost" disabled={!workflowHasSession} onClick={() => addWorkflowNode("wait")}>
@@ -2252,17 +2315,17 @@ function App() {
                     const config = node.config as Record<string, any>;
                     const presetLabel = typeof config.preset_name === "string" ? config.preset_name : "";
                     const inputFile = typeof config.input_file === "string" ? config.input_file : "";
-                    const sessionMode = config.mode === "multi" ? "Multi" : "Single";
-                    const sessionList = Array.isArray(config.sessions) ? config.sessions : [];
-                    const sessionLabel = sessionList.length
-                      ? `${sessionMode}: ${sessionList.join(", ")}`
-                      : "Select sessions";
+                    const sessionValue = typeof config.session === "string" ? config.session : "";
+                    const loopCount = Number(config.loop_count ?? 1);
+                    const sessionLabel = sessionValue
+                      ? `Session: ${sessionValue} • Loops: ${Number.isFinite(loopCount) ? loopCount : 1}`
+                      : "Select session";
                     const metaLines: string[] = [];
                     if (node.type === "session") {
                       metaLines.push(sessionLabel);
                     } else {
                       if (presetLabel) metaLines.push(`Preset: ${presetLabel}`);
-                      if (inputFile) metaLines.push(`CSV: ${inputFile}`);
+                      if (inputFile && node.type !== "warmup") metaLines.push(`CSV: ${inputFile}`);
                     }
                     return (
                       <div
@@ -2356,49 +2419,6 @@ function App() {
                     const presetValue = typeof config.preset_name === "string" ? config.preset_name : "";
                     const inputFileValue = typeof config.input_file === "string" ? config.input_file : "";
                     
-                    const repeatMinRaw = config.repeat_min;
-                    const repeatMaxRaw = config.repeat_max;
-                    const repeatMinValue =
-                      repeatMinRaw === undefined || repeatMinRaw === null || repeatMinRaw === ""
-                        ? ""
-                        : repeatMinRaw;
-                    const repeatMaxValue =
-                      repeatMaxRaw === undefined || repeatMaxRaw === null || repeatMaxRaw === ""
-                        ? ""
-                        : repeatMaxRaw;
-                    const renderRepeat = () => (
-                      <div className="row">
-                        <label>
-                          Repeat min
-                          <input
-                            type="number"
-                            min={1}
-                            value={repeatMinValue}
-                            onChange={(e) => {
-                              const raw = e.target.value;
-                              updateWorkflowNodeConfig(selectedNode.id, {
-                                repeat_min: raw === "" ? "" : Number(raw),
-                              });
-                            }}
-                          />
-                        </label>
-                        <label>
-                          Repeat max
-                          <input
-                            type="number"
-                            min={1}
-                            value={repeatMaxValue}
-                            onChange={(e) => {
-                              const raw = e.target.value;
-                              updateWorkflowNodeConfig(selectedNode.id, {
-                                repeat_max: raw === "" ? "" : Number(raw),
-                              });
-                            }}
-                          />
-                        </label>
-                      </div>
-                    );
-
                     const renderPresetSelect = (options: string[]) => (
                       <label>
                         Preset
@@ -2426,59 +2446,37 @@ function App() {
                       </label>
                     );
                     if (selectedNode.type === "session") {
-                      const mode = config.mode === "multi" ? "multi" : "single";
-                      const sessionsValue = Array.isArray(config.sessions) ? config.sessions : [];
+                      const sessionValue = typeof config.session === "string" ? config.session : "";
+                      const loopCount = Number(config.loop_count ?? 1);
                       return (
                         <>
                           <label>
-                            Mode
+                            Session
                             <select
-                              value={mode}
-                              onChange={(e) =>
-                                updateWorkflowNodeConfig(selectedNode.id, {
-                                  mode: e.target.value,
-                                  sessions: e.target.value === "single" ? sessionsValue.slice(0, 1) : sessionsValue,
-                                })
-                              }
+                              value={sessionValue}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { session: e.target.value })}
                             >
-                              <option value="single">Single account</option>
-                              <option value="multi">Multi account</option>
+                              <option value="">Select session</option>
+                              {sessionOptions.map((item) => (
+                                <option key={item.name} value={item.name}>
+                                  {item.name}
+                                </option>
+                              ))}
                             </select>
                           </label>
-                          {mode === "single" ? (
-                            <label>
-                              Session
-                              <select
-                                value={sessionsValue[0] || ""}
-                                onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { sessions: [e.target.value] })}
-                              >
-                                <option value="">Select session</option>
-                                {sessionOptions.map((item) => (
-                                  <option key={item.name} value={item.name}>
-                                    {item.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          ) : (
-                            <div className="checkbox-grid">
-                              {sessionOptions.map((item) => (
-                                <label key={item.name} className="checkbox">
-                                  <input
-                                    type="checkbox"
-                                    checked={sessionsValue.includes(item.name)}
-                                    onChange={() => {
-                                      const next = sessionsValue.includes(item.name)
-                                        ? sessionsValue.filter((value: string) => value !== item.name)
-                                        : [...sessionsValue, item.name];
-                                      updateWorkflowNodeConfig(selectedNode.id, { sessions: next });
-                                    }}
-                                  />
-                                  {item.name}
-                                </label>
-                              ))}
-                            </div>
-                          )}
+                          <label>
+                            Loop count
+                            <input
+                              type="number"
+                              min={1}
+                              value={Number.isFinite(loopCount) ? loopCount : 1}
+                              onChange={(e) =>
+                                updateWorkflowNodeConfig(selectedNode.id, {
+                                  loop_count: Number(e.target.value) || 1,
+                                })
+                              }
+                            />
+                          </label>
                         </>
                       );
                     }
@@ -2509,7 +2507,6 @@ function App() {
                         <>
                           {renderPresetSelect(presetNames)}
                           {renderInputFile()}
-                          {renderRepeat()}
                           <label>
                             Message
                             <textarea
@@ -2525,7 +2522,6 @@ function App() {
                         <>
                           {renderPresetSelect(presetNames)}
                           {renderInputFile()}
-                          {renderRepeat()}
                           <label>
                             Invite link
                             <input
@@ -2549,7 +2545,6 @@ function App() {
                         <>
                           {renderPresetSelect(presetNames)}
                           {renderInputFile()}
-                          {renderRepeat()}
                           <label>
                             Target group/channel
                             <input
@@ -2566,7 +2561,6 @@ function App() {
                         <>
                           {renderPresetSelect(presetNames)}
                           {renderInputFile()}
-                          {renderRepeat()}
                           <label>
                             Message link
                             <input
@@ -2606,8 +2600,6 @@ function App() {
                       return (
                         <>
                           {renderPresetSelect(warmupPresetNames)}
-                          {renderInputFile()}
-                          {renderRepeat()}
                           <label>
                             Targets
                             <input

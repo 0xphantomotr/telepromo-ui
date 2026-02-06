@@ -86,6 +86,8 @@ export const api = {
       max_wait_seconds: number;
       max_flood_waits: number;
       max_consecutive_errors: number;
+      all_csv_users?: boolean | null;
+      max_users?: number | null;
       min_delay?: number | null;
       max_delay?: number | null;
       total_messages?: number | null;
@@ -103,6 +105,8 @@ export const api = {
     max_wait_seconds: number;
     max_flood_waits: number;
     max_consecutive_errors: number;
+    all_csv_users?: boolean | null;
+    max_users?: number | null;
     min_delay?: number | null;
     max_delay?: number | null;
     total_messages?: number | null;
