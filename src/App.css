@@ -508,6 +508,9 @@ select option {
   border: 1px dashed rgba(255, 255, 255, 0.12);
   background: #0b0d12;
   overflow: hidden;
+  overscroll-behavior: contain;
+  touch-action: none;
+  user-select: none;
 }
 
 .workflow-edges {
@@ -589,7 +592,8 @@ select option {
 
 .workflow-canvas-inner {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
   transform-origin: 0 0;
 }
 

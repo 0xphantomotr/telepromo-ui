@@ -6,6 +6,8 @@ const POLL_INTERVAL_MS = 6000;
 
 const WORKFLOW_NODE_WIDTH = 180;
 const WORKFLOW_NODE_HEIGHT = 88;
+const WORKFLOW_PADDING = 220;
+const WORKFLOW_MIN_SIZE = 1200;
 
 type SessionItem = {
   name: string;
@@ -376,10 +378,47 @@ function App() {
     () => new Map(workflowDraft.nodes.map((node) => [node.id, node])),
     [workflowDraft.nodes]
   );
+  const workflowWorld = useMemo(() => {
+    if (workflowDraft.nodes.length === 0) {
+      return {
+        width: WORKFLOW_MIN_SIZE,
+        height: WORKFLOW_MIN_SIZE,
+        originX: WORKFLOW_PADDING,
+        originY: WORKFLOW_PADDING,
+      };
+    }
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    workflowDraft.nodes.forEach((node) => {
+      const pos = node.position ?? { x: 0, y: 0 };
+      minX = Math.min(minX, pos.x);
+      minY = Math.min(minY, pos.y);
+      maxX = Math.max(maxX, pos.x + WORKFLOW_NODE_WIDTH);
+      maxY = Math.max(maxY, pos.y + WORKFLOW_NODE_HEIGHT);
+    });
+    if (!Number.isFinite(minX)) {
+      minX = 0;
+      minY = 0;
+      maxX = WORKFLOW_MIN_SIZE;
+      maxY = WORKFLOW_MIN_SIZE;
+    }
+    const width = Math.max(maxX - minX + WORKFLOW_PADDING * 2, WORKFLOW_MIN_SIZE);
+    const height = Math.max(maxY - minY + WORKFLOW_PADDING * 2, WORKFLOW_MIN_SIZE);
+    return {
+      width,
+      height,
+      originX: WORKFLOW_PADDING - minX,
+      originY: WORKFLOW_PADDING - minY,
+    };
+  }, [workflowDraft.nodes]);
+  const workflowOriginRef = useRef({ x: 0, y: 0 });
   const workflowRunning = useMemo(
     () => Boolean(workflowDraft.meta?.running),
     [workflowDraft.meta]
   );
+  const clampZoom = (value: number) => Math.max(0.6, Math.min(1.6, Number(value.toFixed(2))));
 
   const [dmForm, setDmForm] = useState<DmForm>({
     session: "",
@@ -862,10 +901,12 @@ function App() {
       if (!bounds) return;
       const x = event.clientX - bounds.left;
       const y = event.clientY - bounds.top;
-      const scaledX = x / zoom - draggingNode.offsetX;
-      const scaledY = y / zoom - draggingNode.offsetY;
-      const maxX = bounds.width / zoom - WORKFLOW_NODE_WIDTH;
-      const maxY = bounds.height / zoom - WORKFLOW_NODE_HEIGHT;
+      const worldX = (x - canvasOffset.x) / zoom;
+      const worldY = (y - canvasOffset.y) / zoom;
+      const scaledX = worldX - draggingNode.offsetX;
+      const scaledY = worldY - draggingNode.offsetY;
+      const nextX = scaledX - workflowWorld.originX;
+      const nextY = scaledY - workflowWorld.originY;
       setWorkflowDraft((draft) => ({
         ...draft,
         nodes: draft.nodes.map((node) =>
@@ -873,8 +914,8 @@ function App() {
             ? {
                 ...node,
                 position: {
-                  x: Math.max(0, Math.min(scaledX, maxX)),
-                  y: Math.max(0, Math.min(scaledY, maxY)),
+                  x: nextX,
+                  y: nextY,
                 },
               }
             : node
@@ -890,7 +931,7 @@ function App() {
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
     };
-  }, [draggingNode, zoom]);
+  }, [draggingNode, canvasOffset.x, canvasOffset.y, workflowWorld.originX, workflowWorld.originY, zoom]);
 
   useEffect(() => {
     if (!panning) return;
@@ -1021,6 +1062,10 @@ function App() {
       if (filteredEdges.some((edge) => edge.source === source && edge.target === target)) {
         return { ...draft, edges: filteredEdges };
       }
+      if (filteredEdges.some((edge) => edge.target === target && edge.source !== source)) {
+        setError("That node is already linked. Remove the existing link first.");
+        return { ...draft, edges: filteredEdges };
+      }
       const edge: WorkflowEdge = {
         id: `edge_${source}_${target}_${Date.now()}`,
         source,
@@ -1030,14 +1075,32 @@ function App() {
     });
   };
 
+  useEffect(() => {
+    const prev = workflowOriginRef.current;
+    if (prev.x === workflowWorld.originX && prev.y === workflowWorld.originY) return;
+    const dx = (workflowWorld.originX - prev.x) * zoom;
+    const dy = (workflowWorld.originY - prev.y) * zoom;
+    if (dx !== 0 || dy !== 0) {
+      setCanvasOffset((offset) => ({ x: offset.x - dx, y: offset.y - dy }));
+    }
+    workflowOriginRef.current = { x: workflowWorld.originX, y: workflowWorld.originY };
+  }, [workflowWorld.originX, workflowWorld.originY, zoom]);
+
   const handleNodeMouseDown = (event: ReactMouseEvent<HTMLDivElement>, node: WorkflowNode) => {
+    event.preventDefault();
     const bounds = canvasRef.current?.getBoundingClientRect();
     if (!bounds) return;
+    const cursorX = event.clientX - bounds.left;
+    const cursorY = event.clientY - bounds.top;
+    const worldX = (cursorX - canvasOffset.x) / zoom;
+    const worldY = (cursorY - canvasOffset.y) / zoom;
+    const nodeX = (node.position?.x ?? 0) + workflowWorld.originX;
+    const nodeY = (node.position?.y ?? 0) + workflowWorld.originY;
     setSelectedNodeId(node.id);
     setDraggingNode({
       id: node.id,
-      offsetX: (event.clientX - bounds.left) / zoom - (node.position?.x ?? 0),
-      offsetY: (event.clientY - bounds.top) / zoom - (node.position?.y ?? 0),
+      offsetX: worldX - nodeX,
+      offsetY: worldY - nodeY,
     });
   };
 
@@ -1063,6 +1126,23 @@ function App() {
       setInspectorPos({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
     }
     setInspectorOpen(true);
+  };
+
+  const handleCanvasWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!canvasRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = canvasRef.current.getBoundingClientRect();
+    const cursorX = event.clientX - rect.left;
+    const cursorY = event.clientY - rect.top;
+    const nextZoom = clampZoom(zoom - event.deltaY * 0.001);
+    if (nextZoom === zoom) return;
+    const worldX = (cursorX - canvasOffset.x) / zoom;
+    const worldY = (cursorY - canvasOffset.y) / zoom;
+    const nextOffsetX = cursorX - worldX * nextZoom;
+    const nextOffsetY = cursorY - worldY * nextZoom;
+    setZoom(nextZoom);
+    setCanvasOffset({ x: nextOffsetX, y: nextOffsetY });
   };
 
   const validateWorkflow = () => {
@@ -2255,24 +2335,34 @@ function App() {
                 className="workflow-canvas"
                 ref={canvasRef}
                 onMouseDown={(event) => {
-                  if (event.target === event.currentTarget) {
-                    setSelectedNodeId(null);
-                    setLinkFrom(null);
-                    setPanning({
-                      startX: event.clientX,
-                      startY: event.clientY,
-                      originX: canvasOffset.x,
-                      originY: canvasOffset.y,
-                    });
+                  const target = event.target as HTMLElement | null;
+                  if (target && target.closest(".workflow-node")) {
+                    return;
                   }
+                  setSelectedNodeId(null);
+                  setLinkFrom(null);
+                  setPanning({
+                    startX: event.clientX,
+                    startY: event.clientY,
+                    originX: canvasOffset.x,
+                    originY: canvasOffset.y,
+                  });
                 }}
+                onWheelCapture={handleCanvasWheel}
               >
                 <div className="workflow-zoom">
                   <button className="ghost" onClick={() => setZoom((z) => Math.max(0.6, Number((z - 0.1).toFixed(2))))}>−</button>
                   <button className="ghost" onClick={() => setZoom(1)}>100%</button>
                   <button className="ghost" onClick={() => setZoom((z) => Math.min(1.6, Number((z + 0.1).toFixed(2))))}>+</button>
                 </div>
-                <div className="workflow-canvas-inner" style={{ transform: `translate(${canvasOffset.x}px, ${canvasOffset.y}px) scale(${zoom})` }}>
+                <div
+                  className="workflow-canvas-inner"
+                  style={{
+                    width: workflowWorld.width,
+                    height: workflowWorld.height,
+                    transform: `translate(${canvasOffset.x}px, ${canvasOffset.y}px) scale(${zoom})`,
+                  }}
+                >
                   <svg className="workflow-edges">
                     <defs>
                       <marker
@@ -2290,10 +2380,10 @@ function App() {
                       const source = nodeLookup.get(edge.source);
                       const target = nodeLookup.get(edge.target);
                       if (!source?.position || !target?.position) return null;
-                      const x1 = source.position.x + WORKFLOW_NODE_WIDTH;
-                      const y1 = source.position.y + WORKFLOW_NODE_HEIGHT / 2;
-                      const x2 = target.position.x;
-                      const y2 = target.position.y + WORKFLOW_NODE_HEIGHT / 2;
+                      const x1 = source.position.x + workflowWorld.originX + WORKFLOW_NODE_WIDTH;
+                      const y1 = source.position.y + workflowWorld.originY + WORKFLOW_NODE_HEIGHT / 2;
+                      const x2 = target.position.x + workflowWorld.originX;
+                      const y2 = target.position.y + workflowWorld.originY + WORKFLOW_NODE_HEIGHT / 2;
                       const dx = Math.max(40, Math.abs(x2 - x1) * 0.5);
                       const c1x = x1 + dx;
                       const c2x = x2 - dx;
@@ -2334,8 +2424,8 @@ function App() {
                           linkFrom === node.id ? " linking" : ""
                         }`}
                         style={{
-                          left: node.position?.x ?? 0,
-                          top: node.position?.y ?? 0,
+                          left: (node.position?.x ?? 0) + workflowWorld.originX,
+                          top: (node.position?.y ?? 0) + workflowWorld.originY,
                         }}
                         onMouseDown={(event) => {
                           event.stopPropagation();
@@ -2348,35 +2438,31 @@ function App() {
                       >
                         <div className="node-header">
                           <div className="node-title">{node.type.replace("_", " ")}</div>
-                          <div className="node-actions">
-                            <button
-                              className="node-btn"
-                              title="Link"
-                              aria-label="Link"
-                              onMouseDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setLinkFrom(node.id);
-                              }}
-                            >
-                              🔗
-                            </button>
-                            <button
-                              className="node-btn"
-                              title="Unlink"
-                              aria-label="Unlink"
-                              onMouseDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                event.stopPropagation();
+                        <div className="node-actions">
+                          <button
+                            className="node-btn"
+                            title={workflowDraft.edges.some((edge) => edge.source === node.id) ? "Unlink" : "Link"}
+                            aria-label={workflowDraft.edges.some((edge) => edge.source === node.id) ? "Unlink" : "Link"}
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (workflowDraft.edges.some((edge) => edge.source === node.id)) {
                                 removeWorkflowLinks(node.id);
-                              }}
-                            >
-                              Unlink
-                            </button>
-                            <button
-                              className="node-btn danger"
-                              title="Delete"
-                              aria-label="Delete"
+                                return;
+                              }
+                              if (linkFrom === node.id) {
+                                setLinkFrom(null);
+                                return;
+                              }
+                              setLinkFrom(node.id);
+                            }}
+                          >
+                            {workflowDraft.edges.some((edge) => edge.source === node.id) ? "⛓️‍💥" : "🔗"}
+                          </button>
+                          <button
+                            className="node-btn danger"
+                            title="Delete"
+                            aria-label="Delete"
                               onMouseDown={(event) => event.stopPropagation()}
                               onClick={(event) => {
                                 event.stopPropagation();
