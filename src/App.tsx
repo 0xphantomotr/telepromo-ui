@@ -4,10 +4,19 @@ import { api, API_BASE } from "./lib/api";
 
 const POLL_INTERVAL_MS = 6000;
 
-const WORKFLOW_NODE_WIDTH = 180;
-const WORKFLOW_NODE_HEIGHT = 88;
+const WORKFLOW_NODE_WIDTH = 120;
+const WORKFLOW_NODE_HEIGHT = 120;
 const WORKFLOW_PADDING = 220;
 const WORKFLOW_MIN_SIZE = 1200;
+const WORKFLOW_NODE_ICONS: Record<string, string> = {
+  session: "/session.svg",
+  dm: "/dm.svg",
+  invite: "/invite.svg",
+  bulk_add: "/bulkAdd.svg",
+  forward: "/forward.svg",
+  wait: "/wait.svg",
+  warmup: "/warmup.svg",
+};
 
 type SessionItem = {
   name: string;
@@ -378,7 +387,8 @@ function App() {
     () => new Map(workflowDraft.nodes.map((node) => [node.id, node])),
     [workflowDraft.nodes]
   );
-  const workflowWorld = useMemo(() => {
+  const workflowWorldLock = useRef<{ originX: number; originY: number } | null>(null);
+  const baseWorkflowWorld = useMemo(() => {
     if (workflowDraft.nodes.length === 0) {
       return {
         width: WORKFLOW_MIN_SIZE,
@@ -413,11 +423,66 @@ function App() {
       originY: WORKFLOW_PADDING - minY,
     };
   }, [workflowDraft.nodes]);
+  const workflowWorld = useMemo(() => {
+    const lock = workflowWorldLock.current;
+    if (!lock) {
+      return baseWorkflowWorld;
+    }
+    return {
+      ...baseWorkflowWorld,
+      originX: lock.originX,
+      originY: lock.originY,
+    };
+  }, [baseWorkflowWorld]);
   const workflowOriginRef = useRef({ x: 0, y: 0 });
   const workflowRunning = useMemo(
     () => Boolean(workflowDraft.meta?.running),
     [workflowDraft.meta]
   );
+
+  const getEdgePoints = (
+    sourcePos: { x: number; y: number },
+    targetPos: { x: number; y: number },
+    origin: { x: number; y: number }
+  ) => {
+    const sx = sourcePos.x + origin.x;
+    const sy = sourcePos.y + origin.y;
+    const tx = targetPos.x + origin.x;
+    const ty = targetPos.y + origin.y;
+    const sCenterX = sx + WORKFLOW_NODE_WIDTH / 2;
+    const sCenterY = sy + WORKFLOW_NODE_HEIGHT / 2;
+    const tCenterX = tx + WORKFLOW_NODE_WIDTH / 2;
+    const tCenterY = ty + WORKFLOW_NODE_HEIGHT / 2;
+    const dx = tCenterX - sCenterX;
+    const dy = tCenterY - sCenterY;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    const horizontal = absDx >= absDy;
+    let x1 = sCenterX;
+    let y1 = sCenterY;
+    let x2 = tCenterX;
+    let y2 = tCenterY;
+    if (horizontal) {
+      const dir = dx >= 0 ? 1 : -1;
+      x1 = sCenterX + dir * (WORKFLOW_NODE_WIDTH / 2);
+      y1 = sCenterY;
+      x2 = tCenterX - dir * (WORKFLOW_NODE_WIDTH / 2);
+      y2 = tCenterY;
+      const curve = Math.max(40, absDx * 0.5);
+      const c1x = x1 + dir * curve;
+      const c2x = x2 - dir * curve;
+      return { x1, y1, x2, y2, c1x, c1y: y1, c2x, c2y: y2 };
+    }
+    const dir = dy >= 0 ? 1 : -1;
+    x1 = sCenterX;
+    y1 = sCenterY + dir * (WORKFLOW_NODE_HEIGHT / 2);
+    x2 = tCenterX;
+    y2 = tCenterY - dir * (WORKFLOW_NODE_HEIGHT / 2);
+    const curve = Math.max(40, absDy * 0.5);
+    const c1y = y1 + dir * curve;
+    const c2y = y2 - dir * curve;
+    return { x1, y1, x2, y2, c1x: x1, c1y, c2x: x2, c2y };
+  };
   const clampZoom = (value: number) => Math.max(0.6, Math.min(1.6, Number(value.toFixed(2))));
 
   const [dmForm, setDmForm] = useState<DmForm>({
@@ -923,7 +988,10 @@ function App() {
       }));
     };
 
-    const handleUp = () => setDraggingNode(null);
+    const handleUp = () => {
+      workflowWorldLock.current = null;
+      setDraggingNode(null);
+    };
 
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
@@ -1058,6 +1126,15 @@ function App() {
   const addWorkflowEdge = (source: string, target: string) => {
     if (source === target) return;
     setWorkflowDraft((draft) => {
+      const sourceNode = draft.nodes.find((node) => node.id === source);
+      const targetNode = draft.nodes.find((node) => node.id === target);
+      if (!sourceNode || !targetNode) {
+        return draft;
+      }
+      if (targetNode.type === "session") {
+        setError("Session nodes cannot have incoming links.");
+        return draft;
+      }
       const filteredEdges = draft.edges.filter((edge) => edge.source !== source);
       if (filteredEdges.some((edge) => edge.source === source && edge.target === target)) {
         return { ...draft, edges: filteredEdges };
@@ -1065,6 +1142,31 @@ function App() {
       if (filteredEdges.some((edge) => edge.target === target && edge.source !== source)) {
         setError("That node is already linked. Remove the existing link first.");
         return { ...draft, edges: filteredEdges };
+      }
+      const edgesWith = [...filteredEdges, { id: "pending", source, target }];
+      const adjacency = new Map<string, string[]>();
+      edgesWith.forEach((edge) => {
+        if (!adjacency.has(edge.source)) {
+          adjacency.set(edge.source, []);
+        }
+        adjacency.get(edge.source)!.push(edge.target);
+      });
+      const stack = [target];
+      const seen = new Set<string>();
+      while (stack.length > 0) {
+        const current = stack.pop();
+        if (!current) continue;
+        if (current === source) {
+          setError("That link would create a loop. Choose a forward node.");
+          return { ...draft, edges: filteredEdges };
+        }
+        const nextNodes = adjacency.get(current) || [];
+        for (const next of nextNodes) {
+          if (!seen.has(next)) {
+            seen.add(next);
+            stack.push(next);
+          }
+        }
       }
       const edge: WorkflowEdge = {
         id: `edge_${source}_${target}_${Date.now()}`,
@@ -1096,6 +1198,7 @@ function App() {
     const worldY = (cursorY - canvasOffset.y) / zoom;
     const nodeX = (node.position?.x ?? 0) + workflowWorld.originX;
     const nodeY = (node.position?.y ?? 0) + workflowWorld.originY;
+    workflowWorldLock.current = { originX: workflowWorld.originX, originY: workflowWorld.originY };
     setSelectedNodeId(node.id);
     setDraggingNode({
       id: node.id,
@@ -2373,28 +2476,26 @@ function App() {
                         refY="3"
                         orient="auto"
                       >
-                        <path d="M0,0 L0,6 L9,3 z" fill="rgba(242,183,96,0.9)" />
+                        <path d="M0,0 L0,6 L9,3 z" fill="var(--wf-edge, rgba(220,223,235,0.8))" />
                       </marker>
                     </defs>
                     {workflowDraft.edges.map((edge) => {
                       const source = nodeLookup.get(edge.source);
                       const target = nodeLookup.get(edge.target);
                       if (!source?.position || !target?.position) return null;
-                      const x1 = source.position.x + workflowWorld.originX + WORKFLOW_NODE_WIDTH;
-                      const y1 = source.position.y + workflowWorld.originY + WORKFLOW_NODE_HEIGHT / 2;
-                      const x2 = target.position.x + workflowWorld.originX;
-                      const y2 = target.position.y + workflowWorld.originY + WORKFLOW_NODE_HEIGHT / 2;
-                      const dx = Math.max(40, Math.abs(x2 - x1) * 0.5);
-                      const c1x = x1 + dx;
-                      const c2x = x2 - dx;
-                      const d = `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`;
+                      const { x1, y1, x2, y2, c1x, c1y, c2x, c2y } = getEdgePoints(
+                        source.position,
+                        target.position,
+                        { x: workflowWorld.originX, y: workflowWorld.originY }
+                      );
+                      const d = `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`;
                       return (
                         <path
                           key={edge.id}
                           d={d}
                           fill="none"
-                          stroke="rgba(242,183,96,0.8)"
-                          strokeWidth="2"
+                          stroke="var(--wf-edge, rgba(220,223,235,0.75))"
+                          strokeWidth="1.6"
                           markerEnd="url(#arrow)"
                         />
                       );
@@ -2407,6 +2508,8 @@ function App() {
                     const inputFile = typeof config.input_file === "string" ? config.input_file : "";
                     const sessionValue = typeof config.session === "string" ? config.session : "";
                     const loopCount = Number(config.loop_count ?? 1);
+                    const iconSrc = WORKFLOW_NODE_ICONS[node.type];
+                    const nodeLabel = node.type.replace("_", " ");
                     const sessionLabel = sessionValue
                       ? `Session: ${sessionValue} • Loops: ${Number.isFinite(loopCount) ? loopCount : 1}`
                       : "Select session";
@@ -2436,8 +2539,6 @@ function App() {
                           handleNodeClick(event, node);
                         }}
                       >
-                        <div className="node-header">
-                          <div className="node-title">{node.type.replace("_", " ")}</div>
                         <div className="node-actions">
                           <button
                             className="node-btn"
@@ -2471,13 +2572,16 @@ function App() {
                             >
                               ×
                             </button>
-                          </div>
                         </div>
-                        {metaLines.map((line) => (
-                          <div key={line} className="node-meta">
-                            {line}
-                          </div>
-                        ))}
+                        {iconSrc ? <img className="node-icon" src={iconSrc} alt="" aria-hidden="true" /> : null}
+                        <div className="node-caption">
+                          <div className="node-title">{nodeLabel}</div>
+                          {metaLines.map((line) => (
+                            <div key={line} className="node-subtitle">
+                              {line}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     );
                   })}

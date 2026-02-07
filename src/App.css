@@ -459,6 +459,18 @@ select option {
 .workflow-section {
   margin-bottom: 32px;
   overflow: visible;
+  --wf-bg: #0b0f16;
+  --wf-bg-deep: #06090f;
+  --wf-dot: rgba(255, 255, 255, 0.14);
+  --wf-dot-soft: rgba(255, 255, 255, 0.06);
+  --wf-edge: rgba(190, 210, 255, 0.75);
+  --wf-panel-border: rgba(76, 201, 240, 0.28);
+  --wf-panel-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  --wf-node-bg: rgba(12, 16, 24, 0.96);
+  --wf-node-border: rgba(168, 196, 240, 0.38);
+  --wf-node-glow: rgba(76, 201, 240, 0.35);
+  --wf-node-text: #e9f2ff;
+  --wf-node-muted: rgba(210, 220, 235, 0.65);
 }
 
 .workflow-layout {
@@ -490,7 +502,25 @@ select option {
 .workflow-help {
   margin-top: 12px;
   font-size: 0.75rem;
-  color: var(--muted);
+  color: rgba(214, 210, 228, 0.65);
+}
+
+.workflow-section .ghost {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(20, 18, 26, 0.7);
+  color: #e8e4f3;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.workflow-section .ghost:hover {
+  border-color: rgba(76, 201, 240, 0.6);
+  color: #ffffff;
+}
+
+.workflow-section .primary {
+  background: linear-gradient(120deg, #8ed7ff, #4cc9f0);
+  color: #06121a;
+  box-shadow: 0 10px 24px rgba(76, 201, 240, 0.35);
 }
 
 .workflow-canvas-panel {
@@ -498,19 +528,35 @@ select option {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  background: linear-gradient(140deg, rgba(18, 22, 32, 0.92), rgba(9, 12, 18, 0.96));
+  border: 1px solid var(--wf-panel-border);
+  box-shadow: var(--wf-panel-shadow);
+  border-radius: 22px;
 }
 
 .workflow-canvas {
   position: relative;
   flex: 1;
   min-height: 560px;
-  border-radius: 18px;
-  border: 1px dashed rgba(255, 255, 255, 0.12);
-  background: #0b0d12;
+  border-radius: 20px;
+  border: 1px solid rgba(76, 201, 240, 0.4);
+  background-color: var(--wf-bg);
+  background-image: radial-gradient(var(--wf-dot) 1px, transparent 1px),
+    radial-gradient(var(--wf-dot-soft) 1px, transparent 1px),
+    radial-gradient(circle at top right, rgba(76, 201, 240, 0.16), transparent 55%),
+    radial-gradient(circle at bottom left, rgba(76, 201, 240, 0.12), transparent 50%);
+  background-size: 22px 22px, 110px 110px, 100% 100%, 100% 100%;
+  background-position: 0 0, 11px 11px, 0 0, 0 0;
   overflow: hidden;
   overscroll-behavior: contain;
   touch-action: none;
   user-select: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 24px 60px rgba(0, 0, 0, 0.6);
+  cursor: grab;
+}
+
+.workflow-canvas:active {
+  cursor: grabbing;
 }
 
 .workflow-edges {
@@ -523,39 +569,41 @@ select option {
 
 .workflow-node {
   position: absolute;
-  width: 180px;
-  min-height: 88px;
+  width: 120px;
+  height: 120px;
   padding: 12px;
-  border-radius: 14px;
-  background: linear-gradient(160deg, rgba(32, 36, 48, 0.95), rgba(19, 22, 30, 0.95));
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  border-radius: 16px;
+  background: linear-gradient(160deg, rgba(14, 19, 30, 0.98), rgba(7, 10, 18, 0.98));
+  border: 1px solid var(--wf-node-border);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(6px);
   cursor: grab;
   user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workflow-node:active {
+  cursor: grabbing;
 }
 
 .workflow-node.selected {
-  border-color: rgba(242, 183, 96, 0.8);
-  box-shadow: 0 0 0 2px rgba(242, 183, 96, 0.25);
+  border-color: rgba(76, 201, 240, 0.9);
+  box-shadow: 0 0 0 2px rgba(76, 201, 240, 0.35), 0 18px 34px rgba(0, 0, 0, 0.6);
 }
 
 .workflow-node.linking {
-  border-color: rgba(76, 201, 240, 0.9);
-  box-shadow: 0 0 0 2px rgba(76, 201, 240, 0.25);
+  border-color: rgba(109, 211, 255, 0.95);
+  box-shadow: 0 0 0 2px rgba(109, 211, 255, 0.35);
 }
 
 .workflow-node .node-title {
-  font-size: 0.72rem;
-  letter-spacing: 0.18em;
+  font-size: 0.86rem;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--wf-node-text);
   font-weight: 600;
-}
-
-.workflow-node .node-meta {
-  margin-top: 8px;
-  font-size: 0.8rem;
-  color: var(--accent);
 }
 
 .workflow-header {
@@ -578,6 +626,8 @@ select option {
   width: 140px;
   padding: 6px 8px;
   font-size: 0.75rem;
+  background: rgba(16, 14, 22, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.14);
 }
 
 .workflow-toolbar input:disabled {
@@ -604,11 +654,20 @@ select option {
   display: flex;
   gap: 6px;
   z-index: 5;
+  padding: 6px;
+  border-radius: 14px;
+  background: rgba(18, 16, 24, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4);
 }
 
 .workflow-zoom button {
   padding: 6px 10px;
   font-size: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e6e2f2;
 }
 
 .workflow-inspector-popup {
@@ -632,25 +691,38 @@ select option {
 }
 
 
-.node-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
+.node-icon {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.45));
 }
 
 .node-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
   display: flex;
   gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.workflow-node:hover .node-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .node-btn {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(0, 0, 0, 0.35);
-  color: #f8f6f3;
-  font-size: 0.7rem;
-  padding: 2px 6px;
-  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(12, 14, 20, 0.7);
+  color: #e8f2ff;
+  font-size: 0.72rem;
+  padding: 3px 7px;
+  border-radius: 10px;
   cursor: pointer;
 }
 
@@ -659,14 +731,39 @@ select option {
   color: #ff8b8b;
 }
 
+.node-caption {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  min-width: 140px;
+  color: var(--wf-node-text);
+  pointer-events: none;
+}
+
+.node-subtitle {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--wf-node-muted);
+}
+
 .workflow-palette {
   position: sticky;
   top: 18px;
+  background: linear-gradient(160deg, rgba(18, 22, 32, 0.94), rgba(9, 12, 18, 0.96));
+  border: 1px solid var(--wf-panel-border);
+  box-shadow: var(--wf-panel-shadow);
+  border-radius: 22px;
 }
 
 .workflow-inspector {
   position: sticky;
   top: 18px;
+  background: linear-gradient(160deg, rgba(18, 22, 32, 0.94), rgba(9, 12, 18, 0.96));
+  border: 1px solid var(--wf-panel-border);
+  box-shadow: var(--wf-panel-shadow);
+  border-radius: 22px;
 }
 
 input[type=number]::-webkit-outer-spin-button,
