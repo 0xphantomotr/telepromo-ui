@@ -2698,6 +2698,14 @@ function App() {
                           {renderPresetSelect(presetNames)}
                           {renderInputFile()}
                           <label>
+                            Media path
+                            <input
+                              type="text"
+                              value={config.media_path ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
+                            />
+                          </label>
+                          <label>
                             Message
                             <textarea
                               value={config.message ?? ""}
