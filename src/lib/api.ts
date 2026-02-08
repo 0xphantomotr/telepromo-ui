@@ -191,6 +191,9 @@ export const api = {
     input_file: string;
     message: string;
     use_spintax?: boolean;
+    spintax_ai?: boolean;
+    spintax_variations?: number;
+    ai_profile_id?: string;
     media_path?: string;
     preset_name?: string;
     speed_profile?: string;
@@ -219,6 +222,9 @@ export const api = {
     invite_url: string;
     message?: string;
     use_spintax?: boolean;
+    spintax_ai?: boolean;
+    spintax_variations?: number;
+    ai_profile_id?: string;
     media_path?: string;
     preset_name?: string;
     speed_profile?: string;
@@ -330,6 +336,9 @@ export const api = {
     input_file: string;
     message: string;
     use_spintax?: boolean;
+    spintax_ai?: boolean;
+    spintax_variations?: number;
+    ai_profile_id?: string;
     media_path?: string;
     preset_name?: string;
     speed_profile?: string;
@@ -358,6 +367,9 @@ export const api = {
     invite_url: string;
     message?: string;
     use_spintax?: boolean;
+    spintax_ai?: boolean;
+    spintax_variations?: number;
+    ai_profile_id?: string;
     media_path?: string;
     speed_profile?: string;
     safe_mode?: boolean;

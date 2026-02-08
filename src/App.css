@@ -303,6 +303,12 @@ pre {
   gap: 12px;
 }
 
+.helper-text {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .row {
   display: flex;
   gap: 12px;

@@ -17,6 +17,8 @@ const WORKFLOW_NODE_ICONS: Record<string, string> = {
   wait: "/wait.svg",
   warmup: "/warmup.svg",
 };
+const SPINTAX_HELP =
+  "Spintax picks a random option inside {a|b}. Example: Hey {friend|there}! AI Spintax auto-generates variations using your default AI profile.";
 
 type SessionItem = {
   name: string;
@@ -56,6 +58,8 @@ type AiProfileForm = {
 
 type CommonOptions = {
   use_spintax: boolean;
+  spintax_ai: boolean;
+  spintax_variations: string;
   media_path: string;
   preset_name: string;
   exclude_bots: boolean;
@@ -232,6 +236,8 @@ type MultiWarmupForm = {
 
 const baseOptions: CommonOptions = {
   use_spintax: false,
+  spintax_ai: false,
+  spintax_variations: "5",
   media_path: "",
   preset_name: "",
   exclude_bots: true,
@@ -1056,13 +1062,36 @@ function App() {
     } else if (type === "wait") {
       config = { min_seconds: 600, max_seconds: 900 };
     } else if (type === "dm") {
-      config = { preset_name: presetNames[0] || "", message: "", input_file: "data/shqipo.csv" };
+      config = {
+        preset_name: presetNames[0] || "",
+        message: "",
+        input_file: "data/shqipo.csv",
+        media_path: "",
+        use_spintax: false,
+        spintax_ai: false,
+        spintax_variations: 5,
+      };
     } else if (type === "invite") {
-      config = { preset_name: presetNames[0] || "", invite_url: "", message: "", input_file: "data/shqipo.csv" };
+      config = {
+        preset_name: presetNames[0] || "",
+        invite_url: "",
+        message: "",
+        input_file: "data/shqipo.csv",
+        media_path: "",
+        use_spintax: false,
+        spintax_ai: false,
+        spintax_variations: 5,
+      };
     } else if (type === "bulk_add") {
       config = { preset_name: presetNames[0] || "", target_ref: "", input_file: "data/shqipo.csv" };
     } else if (type === "forward") {
-      config = { preset_name: presetNames[0] || "", message_link: "", drop_author: false, input_file: "data/shqipo.csv" };
+      config = {
+        preset_name: presetNames[0] || "",
+        message_link: "",
+        drop_author: false,
+        has_media: false,
+        input_file: "data/shqipo.csv",
+      };
     } else if (type === "warmup") {
       config = { preset_name: warmupPresetNames[0] || "", targets: "me" };
     }
@@ -2705,6 +2734,39 @@ function App() {
                               onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
                             />
                           </label>
+                          <label className="toggle">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(config.use_spintax)}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
+                            />
+                            Spintax
+                          </label>
+                          <label className="toggle">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(config.spintax_ai)}
+                              disabled={!config.use_spintax}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
+                            />
+                            AI Spintax
+                          </label>
+                          <label>
+                            AI variations
+                            <input
+                              type="number"
+                              min={2}
+                              max={12}
+                              disabled={!config.use_spintax || !config.spintax_ai}
+                              value={Number.isFinite(Number(config.spintax_variations)) ? Number(config.spintax_variations) : 5}
+                              onChange={(e) =>
+                                updateWorkflowNodeConfig(selectedNode.id, {
+                                  spintax_variations: Number(e.target.value) || 5,
+                                })
+                              }
+                            />
+                          </label>
+                          <div className="helper-text">{SPINTAX_HELP}</div>
                           <label>
                             Message
                             <textarea
@@ -2728,6 +2790,47 @@ function App() {
                               onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { invite_url: e.target.value })}
                             />
                           </label>
+                          <label>
+                            Media path
+                            <input
+                              type="text"
+                              value={config.media_path ?? ""}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
+                            />
+                          </label>
+                          <label className="toggle">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(config.use_spintax)}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
+                            />
+                            Spintax
+                          </label>
+                          <label className="toggle">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(config.spintax_ai)}
+                              disabled={!config.use_spintax}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
+                            />
+                            AI Spintax
+                          </label>
+                          <label>
+                            AI variations
+                            <input
+                              type="number"
+                              min={2}
+                              max={12}
+                              disabled={!config.use_spintax || !config.spintax_ai}
+                              value={Number.isFinite(Number(config.spintax_variations)) ? Number(config.spintax_variations) : 5}
+                              onChange={(e) =>
+                                updateWorkflowNodeConfig(selectedNode.id, {
+                                  spintax_variations: Number(e.target.value) || 5,
+                                })
+                              }
+                            />
+                          </label>
+                          <div className="helper-text">{SPINTAX_HELP}</div>
                           <label>
                             Message
                             <textarea
@@ -2782,6 +2885,14 @@ function App() {
                               value={config.message_id ?? ""}
                               onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message_id: e.target.value })}
                             />
+                          </label>
+                          <label className="toggle">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(config.has_media)}
+                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { has_media: e.target.checked })}
+                            />
+                            Has media
                           </label>
                           <label className="toggle">
                             <input
@@ -2885,11 +2996,38 @@ function App() {
                   <input
                     type="checkbox"
                     checked={dmForm.use_spintax}
-                    onChange={(e) => setDmForm({ ...dmForm, use_spintax: e.target.checked })}
+                    onChange={(e) =>
+                      setDmForm({
+                        ...dmForm,
+                        use_spintax: e.target.checked,
+                        spintax_ai: e.target.checked ? dmForm.spintax_ai : false,
+                      })
+                    }
                   />
                   Spintax
                 </label>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={dmForm.spintax_ai}
+                    disabled={!dmForm.use_spintax}
+                    onChange={(e) => setDmForm({ ...dmForm, spintax_ai: e.target.checked })}
+                  />
+                  AI Spintax
+                </label>
               </div>
+              <label>
+                AI variations
+                <input
+                  type="number"
+                  min={2}
+                  max={12}
+                  disabled={!dmForm.use_spintax || !dmForm.spintax_ai}
+                  value={dmForm.spintax_variations}
+                  onChange={(e) => setDmForm({ ...dmForm, spintax_variations: e.target.value })}
+                />
+              </label>
+              <div className="helper-text">{SPINTAX_HELP}</div>
               <button
                 className="primary"
                 onClick={() =>
@@ -2900,6 +3038,11 @@ function App() {
                       input_file: dmForm.input_file,
                       message: dmForm.message,
                       use_spintax: dmForm.use_spintax,
+                      spintax_ai: dmForm.spintax_ai,
+                      spintax_variations:
+                        dmForm.spintax_ai && dmForm.spintax_variations
+                          ? toOptionalInt(dmForm.spintax_variations)
+                          : undefined,
                       media_path: dmForm.media_path || undefined,
                       preset_name: dmForm.preset_name || undefined,
                       targeting: buildTargeting(dmForm),
@@ -2979,11 +3122,38 @@ function App() {
                   <input
                     type="checkbox"
                     checked={inviteForm.use_spintax}
-                    onChange={(e) => setInviteForm({ ...inviteForm, use_spintax: e.target.checked })}
+                    onChange={(e) =>
+                      setInviteForm({
+                        ...inviteForm,
+                        use_spintax: e.target.checked,
+                        spintax_ai: e.target.checked ? inviteForm.spintax_ai : false,
+                      })
+                    }
                   />
                   Spintax
                 </label>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={inviteForm.spintax_ai}
+                    disabled={!inviteForm.use_spintax}
+                    onChange={(e) => setInviteForm({ ...inviteForm, spintax_ai: e.target.checked })}
+                  />
+                  AI Spintax
+                </label>
               </div>
+              <label>
+                AI variations
+                <input
+                  type="number"
+                  min={2}
+                  max={12}
+                  disabled={!inviteForm.use_spintax || !inviteForm.spintax_ai}
+                  value={inviteForm.spintax_variations}
+                  onChange={(e) => setInviteForm({ ...inviteForm, spintax_variations: e.target.value })}
+                />
+              </label>
+              <div className="helper-text">{SPINTAX_HELP}</div>
               <button
                 className="primary"
                 onClick={() =>
@@ -2995,6 +3165,11 @@ function App() {
                       invite_url: inviteForm.invite_url,
                       message: inviteForm.message || undefined,
                       use_spintax: inviteForm.use_spintax,
+                      spintax_ai: inviteForm.spintax_ai,
+                      spintax_variations:
+                        inviteForm.spintax_ai && inviteForm.spintax_variations
+                          ? toOptionalInt(inviteForm.spintax_variations)
+                          : undefined,
                       media_path: inviteForm.media_path || undefined,
                       preset_name: inviteForm.preset_name || undefined,
                       targeting: buildTargeting(inviteForm),
@@ -3406,11 +3581,38 @@ function App() {
                   <input
                     type="checkbox"
                     checked={multiForm.use_spintax}
-                    onChange={(e) => setMultiForm({ ...multiForm, use_spintax: e.target.checked })}
+                    onChange={(e) =>
+                      setMultiForm({
+                        ...multiForm,
+                        use_spintax: e.target.checked,
+                        spintax_ai: e.target.checked ? multiForm.spintax_ai : false,
+                      })
+                    }
                   />
                   Spintax
                 </label>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={multiForm.spintax_ai}
+                    disabled={!multiForm.use_spintax}
+                    onChange={(e) => setMultiForm({ ...multiForm, spintax_ai: e.target.checked })}
+                  />
+                  AI Spintax
+                </label>
               </div>
+              <label>
+                AI variations
+                <input
+                  type="number"
+                  min={2}
+                  max={12}
+                  disabled={!multiForm.use_spintax || !multiForm.spintax_ai}
+                  value={multiForm.spintax_variations}
+                  onChange={(e) => setMultiForm({ ...multiForm, spintax_variations: e.target.value })}
+                />
+              </label>
+              <div className="helper-text">{SPINTAX_HELP}</div>
               <button
                 className="primary"
                 onClick={() => {
@@ -3422,6 +3624,11 @@ function App() {
                       input_file: multiForm.input_file,
                       message: multiForm.message,
                       use_spintax: multiForm.use_spintax,
+                      spintax_ai: multiForm.spintax_ai,
+                      spintax_variations:
+                        multiForm.spintax_ai && multiForm.spintax_variations
+                          ? toOptionalInt(multiForm.spintax_variations)
+                          : undefined,
                       media_path: multiForm.media_path || undefined,
                       preset_name: multiForm.preset_name || undefined,
                       targeting: buildTargeting(multiForm),
@@ -3488,11 +3695,38 @@ function App() {
                   <input
                     type="checkbox"
                     checked={multiInviteForm.use_spintax}
-                    onChange={(e) => setMultiInviteForm({ ...multiInviteForm, use_spintax: e.target.checked })}
+                    onChange={(e) =>
+                      setMultiInviteForm({
+                        ...multiInviteForm,
+                        use_spintax: e.target.checked,
+                        spintax_ai: e.target.checked ? multiInviteForm.spintax_ai : false,
+                      })
+                    }
                   />
                   Spintax
                 </label>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={multiInviteForm.spintax_ai}
+                    disabled={!multiInviteForm.use_spintax}
+                    onChange={(e) => setMultiInviteForm({ ...multiInviteForm, spintax_ai: e.target.checked })}
+                  />
+                  AI Spintax
+                </label>
               </div>
+              <label>
+                AI variations
+                <input
+                  type="number"
+                  min={2}
+                  max={12}
+                  disabled={!multiInviteForm.use_spintax || !multiInviteForm.spintax_ai}
+                  value={multiInviteForm.spintax_variations}
+                  onChange={(e) => setMultiInviteForm({ ...multiInviteForm, spintax_variations: e.target.value })}
+                />
+              </label>
+              <div className="helper-text">{SPINTAX_HELP}</div>
               <button
                 className="primary"
                 onClick={() => {
@@ -3505,6 +3739,11 @@ function App() {
                       invite_url: multiInviteForm.invite_url,
                       message: multiInviteForm.message || undefined,
                       use_spintax: multiInviteForm.use_spintax,
+                      spintax_ai: multiInviteForm.spintax_ai,
+                      spintax_variations:
+                        multiInviteForm.spintax_ai && multiInviteForm.spintax_variations
+                          ? toOptionalInt(multiInviteForm.spintax_variations)
+                          : undefined,
                       media_path: multiInviteForm.media_path || undefined,
                       preset_name: multiInviteForm.preset_name || undefined,
                       targeting: buildTargeting(multiInviteForm),
