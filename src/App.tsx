@@ -4,8 +4,8 @@ import { api, API_BASE } from "./lib/api";
 
 const POLL_INTERVAL_MS = 6000;
 
-const WORKFLOW_NODE_WIDTH = 120;
-const WORKFLOW_NODE_HEIGHT = 120;
+const WORKFLOW_NODE_WIDTH = 96;
+const WORKFLOW_NODE_HEIGHT = 96;
 const WORKFLOW_PADDING = 220;
 const WORKFLOW_MIN_SIZE = 1200;
 const WORKFLOW_NODE_ICONS: Record<string, string> = {
@@ -340,6 +340,8 @@ function App() {
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraft>(defaultWorkflowDraft);
   const [presetForm, setPresetForm] = useState<PresetForm>(defaultPresetForm);
+  const [presetEditing, setPresetEditing] = useState(false);
+  const [sidebarExpanded, setSidebarExpanded] = useState(true);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -354,13 +356,12 @@ function App() {
 
   const tabs = [
     { id: "overview", label: "Overview" },
-    { id: "sessions", label: "Sessions" },
+    { id: "sessions", label: "Session management" },
     { id: "presets", label: "Craft presets" },
     { id: "workflows", label: "Humanistic loops" },
     { id: "single", label: "Single" },
     { id: "multi", label: "Multi" },
-    { id: "jobs", label: "Jobs" },
-    { id: "logs", label: "Logs" },
+    { id: "metrics", label: "Metrics" },
   ];
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -569,6 +570,18 @@ function App() {
   const [multiWarmupForm, setMultiWarmupForm] = useState<MultiWarmupForm>({
     targets: "",
     preset_name: "",
+  });
+
+  const [singleSession, setSingleSession] = useState("");
+  const [singlePanel, setSinglePanel] = useState<"dm" | "invite" | "bulk_add" | "forward" | "profile" | "warmup">("dm");
+  const [multiPanel, setMultiPanel] = useState<string | null>(null);
+  const [presetPanel, setPresetPanel] = useState<string | null>("preset-dm");
+  const [sessionsPanel, setSessionsPanel] = useState<string | null>("sessions-main");
+  const [sideNavOpen, setSideNavOpen] = useState<{ [key: string]: boolean }>({
+    single: true,
+    multi: false,
+    presets: false,
+    sessions: false,
   });
 
   const [multiSessions, setMultiSessions] = useState<string[]>([]);
@@ -879,6 +892,7 @@ function App() {
     if (!first) {
       return;
     }
+    setSingleSession((prev) => prev || first);
     setDmForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setInviteForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setBulkAddForm((prev) => (prev.session ? prev : { ...prev, session: first }));
@@ -894,11 +908,43 @@ function App() {
   }, [sessionOptions]);
 
   useEffect(() => {
+    if (!singleSession) {
+      return;
+    }
+    setDmForm((prev) => ({ ...prev, session: singleSession }));
+    setInviteForm((prev) => ({ ...prev, session: singleSession }));
+    setBulkAddForm((prev) => ({ ...prev, session: singleSession }));
+    setForwardForm((prev) => ({ ...prev, session: singleSession }));
+    setProfileForm((prev) => ({ ...prev, session: singleSession }));
+    setWarmupForm((prev) => ({ ...prev, session: singleSession }));
+  }, [singleSession]);
+
+  useEffect(() => {
     if (!proxyForm.session) {
       return;
     }
     loadSessionProxy(proxyForm.session);
   }, [proxyForm.session]);
+
+  useEffect(() => {
+    if (!notice) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      setNotice(null);
+    }, 20000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
+    if (!error) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      setError(null);
+    }, 20000);
+    return () => clearTimeout(timer);
+  }, [error]);
 
   useEffect(() => {
     if (!workflowDraft.id.trim() && workflowDraft.nodes.some((node) => node.type === "session")) {
@@ -1518,7 +1564,8 @@ function App() {
       }
       await api.savePreset(payload as any);
       updateNotice(`Preset saved: ${name}`);
-      setPresetForm(defaultPresetForm);
+      setPresetForm({ ...defaultPresetForm, kind });
+      setPresetEditing(false);
       refreshPresets();
     } catch (err: any) {
       setError(err.message || "Failed to save preset");
@@ -1527,6 +1574,8 @@ function App() {
 
   const handlePresetEdit = (preset: PresetItem) => {
     const kind = preset.kind || "dm";
+    setPresetEditing(true);
+    setPresetPanel(kind === "warmup" ? "preset-warmup" : "preset-dm");
     setPresetForm({
       ...defaultPresetForm,
       name: preset.name,
@@ -1662,13 +1711,13 @@ function App() {
 
   const selectedMultiSessions = multiSessions.filter(Boolean);
   const showOverview = activeTab === "overview";
-  const showSessions = showOverview || activeTab === "sessions";
+  const showSessions = activeTab === "sessions";
   const showPresets = activeTab === "presets";
   const showWorkflows = activeTab === "workflows";
   const showSingle = activeTab === "single";
   const showMulti = activeTab === "multi";
-  const showJobs = showOverview || activeTab === "jobs";
-  const showLogs = showOverview || activeTab === "logs";
+  const showMetrics = activeTab === "metrics";
+  const runningJobs = useMemo(() => jobs.filter((job) => job.status === "running"), [jobs]);
 
   const toggleMultiSession = (name: string) => {
     setMultiSessions((prev) =>
@@ -1705,50 +1754,301 @@ function App() {
     });
   };
 
+  const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Workspace";
+  const singleNavItems = [
+    { id: "dm", label: "Direct Message" },
+    { id: "invite", label: "Invite Link DM" },
+    { id: "bulk_add", label: "Bulk Add" },
+    { id: "forward", label: "Forward" },
+    { id: "profile", label: "Profile" },
+    { id: "warmup", label: "Warmup" },
+  ];
+  const presetNavItems = [
+    { id: "preset-dm", label: "DM presets" },
+    { id: "preset-warmup", label: "Warmup presets" },
+  ];
+  const sessionNavItems = [
+    { id: "sessions-main", label: "Session management" },
+    { id: "sessions-tools", label: "Config and Tools" },
+  ];
+  const multiNavItems = [
+    { id: "multi-dm", label: "Multi DM" },
+    { id: "multi-invite", label: "Multi Invite DM" },
+    { id: "multi-bulk", label: "Multi Bulk Add" },
+    { id: "multi-forward", label: "Multi Forward" },
+    { id: "multi-profile", label: "Multi Profile" },
+    { id: "multi-warmup", label: "Multi Warmup" },
+  ];
+
+  const handleSideNavToggle = (id: string) => {
+    setSideNavOpen((prev) => {
+      const next = { single: false, multi: false, presets: false, sessions: false };
+      if (!prev[id]) {
+        next[id as keyof typeof next] = true;
+      }
+      return next;
+    });
+  };
+
+  const closeSideNav = () => {
+    setSideNavOpen({ single: false, multi: false, presets: false, sessions: false });
+  };
+
+  const handleSideNavSelect = (tabId: string, subId?: string) => {
+    setActiveTab(tabId);
+    if (tabId === "single" && subId) {
+      setSinglePanel(subId as typeof singlePanel);
+    }
+    if (tabId === "presets" && subId) {
+      setPresetPanel(subId);
+      setPresetForm((prev) => ({
+        ...prev,
+        kind: subId === "preset-warmup" ? "warmup" : "dm",
+      }));
+    }
+    if (tabId === "sessions") {
+      if (subId) {
+        setSessionsPanel(subId);
+      } else if (!sessionsPanel) {
+        setSessionsPanel("sessions-main");
+      }
+    }
+    if (tabId === "multi") {
+      if (subId) {
+        setMultiPanel(subId);
+      } else if (!multiPanel) {
+        setMultiPanel("multi-dm");
+      }
+      if (subId) {
+        requestAnimationFrame(() => {
+          const target = document.getElementById(subId);
+          if (target) {
+            target.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        });
+      }
+    }
+    if (tabId === "presets" && subId) {
+      requestAnimationFrame(() => {
+        const target = document.getElementById(subId);
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      });
+    }
+    if (tabId === "sessions" && subId) {
+      requestAnimationFrame(() => {
+        const target = document.getElementById(subId);
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      });
+    }
+  };
+
   return (
-    <div className="app">
-      <header className="topbar">
-        <div>
+    <div className="app-shell">
+      <aside className="sidebar" data-expanded={sidebarExpanded ? "true" : "false"}>
+        <button
+          className="sidebar-toggle"
+          onClick={() => setSidebarExpanded((prev) => !prev)}
+          aria-label={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
+        >
+          {sidebarExpanded ? "◀" : "▶"}
+        </button>
+        <div className="sidebar-brand">
           <p className="eyebrow">Telepromo Control</p>
           <h1>Campaign Command Center</h1>
           <p className="subtle">
             API: <span>{API_BASE}</span>
           </p>
         </div>
-        <div className={`status-pill ${connected ? "ok" : "bad"}`}>
+        <div className={`status-pill sidebar-status ${connected ? "ok" : "bad"}`}>
           {connected ? "Connected" : "Offline"}
           <span className="status-note">{healthMessage}</span>
         </div>
-      </header>
+        <nav className="side-nav">
+          {tabs.map((tab) => {
+            if (tab.id === "single") {
+              return (
+                <div key={tab.id} className="side-group">
+                  <button
+                    className={`side-tab ${activeTab === tab.id ? "active" : ""}`}
+                    data-short="S"
+                    onClick={() => {
+                      handleSideNavSelect("single");
+                      handleSideNavToggle("single");
+                    }}
+                  >
+                    <span>{tab.label}</span>
+                    <span className={`side-caret ${sideNavOpen.single ? "open" : ""}`}>▾</span>
+                  </button>
+                  {sideNavOpen.single && (
+                    <div className="side-subnav">
+                      {singleNavItems.map((item) => (
+                        <button
+                          key={item.id}
+                          className={`side-subtab ${activeTab === "single" && singlePanel === item.id ? "active" : ""}`}
+                          onClick={() => handleSideNavSelect("single", item.id)}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            if (tab.id === "sessions") {
+              return (
+                <div key={tab.id} className="side-group">
+                  <button
+                    className={`side-tab ${activeTab === tab.id ? "active" : ""}`}
+                    data-short="SM"
+                    onClick={() => {
+                      handleSideNavSelect("sessions");
+                      handleSideNavToggle("sessions");
+                    }}
+                  >
+                    <span>{tab.label}</span>
+                    <span className={`side-caret ${sideNavOpen.sessions ? "open" : ""}`}>▾</span>
+                  </button>
+                  {sideNavOpen.sessions && (
+                    <div className="side-subnav">
+                      {sessionNavItems.map((item) => (
+                        <button
+                          key={item.id}
+                          className={`side-subtab ${activeTab === "sessions" && sessionsPanel === item.id ? "active" : ""}`}
+                          onClick={() => handleSideNavSelect("sessions", item.id)}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            if (tab.id === "presets") {
+              return (
+                <div key={tab.id} className="side-group">
+                  <button
+                    className={`side-tab ${activeTab === tab.id ? "active" : ""}`}
+                    data-short="CP"
+                    onClick={() => {
+                      handleSideNavSelect("presets");
+                      handleSideNavToggle("presets");
+                    }}
+                  >
+                    <span>{tab.label}</span>
+                    <span className={`side-caret ${sideNavOpen.presets ? "open" : ""}`}>▾</span>
+                  </button>
+                  {sideNavOpen.presets && (
+                    <div className="side-subnav">
+                      {presetNavItems.map((item) => (
+                        <button
+                          key={item.id}
+                          className={`side-subtab ${activeTab === "presets" && presetPanel === item.id ? "active" : ""}`}
+                          onClick={() => handleSideNavSelect("presets", item.id)}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            if (tab.id === "multi") {
+              return (
+                <div key={tab.id} className="side-group">
+                  <button
+                    className={`side-tab ${activeTab === tab.id ? "active" : ""}`}
+                    data-short="M"
+                    onClick={() => {
+                      handleSideNavSelect("multi");
+                      handleSideNavToggle("multi");
+                    }}
+                  >
+                    <span>{tab.label}</span>
+                    <span className={`side-caret ${sideNavOpen.multi ? "open" : ""}`}>▾</span>
+                  </button>
+                  {sideNavOpen.multi && (
+                    <div className="side-subnav">
+                      {multiNavItems.map((item) => (
+                        <button
+                          key={item.id}
+                          className={`side-subtab ${activeTab === "multi" && multiPanel === item.id ? "active" : ""}`}
+                          onClick={() => handleSideNavSelect("multi", item.id)}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            return (
+              <button
+                key={tab.id}
+                className={`side-tab ${activeTab === tab.id ? "active" : ""}`}
+                data-short={tab.label.slice(0, 2).toUpperCase()}
+                onClick={() => {
+                  closeSideNav();
+                  handleSideNavSelect(tab.id);
+                }}
+              >
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+      </aside>
 
-      {(notice || error) && (
-        <div className="alerts">
-          {notice && <p className="success">{notice}</p>}
-          {error && <p className="error">{error}</p>}
-        </div>
-      )}
+      <main className="app-main">
+        <div className="app-content">
+          <header className="main-header">
+            <div>
+              <p className="eyebrow">Workspace</p>
+              <h2>{activeTabLabel}</h2>
+              <p className="subtle">Pick a section from the left navigation.</p>
+            </div>
+          </header>
 
-      <nav className="tabbar">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            className={`tab ${activeTab === tab.id ? "active" : ""}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
+          {(notice || error) && (
+            <div className="alerts">
+              {notice && (
+                <div key={`notice-${notice}`} className="alert-item alert-success">
+                  <span>{notice}</span>
+                  <span className="alert-progress" />
+                </div>
+              )}
+              {error && (
+                <div key={`error-${error}`} className="alert-item alert-error">
+                  <span>{error}</span>
+                  <span className="alert-progress" />
+                </div>
+              )}
+            </div>
+          )}
 
-      {showSessions && (
+      {showOverview && (
       <section className="section">
         <div className="section-header">
-          <h2>Sessions & Tools</h2>
-          <button className="ghost" onClick={refreshSessions}>
-            Refresh
+          <h2>Overview</h2>
+          <button
+            className="ghost"
+            onClick={() => {
+              refreshSessions();
+              refreshJobs();
+              refreshLogs();
+            }}
+          >
+            Refresh all
           </button>
         </div>
-        <div className="panel-grid">
+        <div className="overview-grid">
           <div className="panel">
             <div className="panel-header">
               <h3>Sessions</h3>
@@ -1774,7 +2074,140 @@ function App() {
             </div>
           </div>
 
-          <div className="panel">
+          <div className="overview-stack">
+            <div className="panel">
+              <div className="panel-header">
+                <h3>Running Jobs</h3>
+                <span className="hint">{runningJobs.length} running</span>
+              </div>
+              {runningJobs.length === 0 ? (
+                <p className="muted">No running jobs.</p>
+              ) : (
+                <div className="job-list">
+                  {runningJobs.map((job) => (
+                    <div key={job.id} className="job-card" onClick={() => setSelectedJobId(job.id)}>
+                      <div>
+                        <h4>{job.type}</h4>
+                        <p className="meta">{job.id}</p>
+                        <p className="meta">Status: {job.status}</p>
+                        {job.error && <p className="meta error">Error: {job.error}</p>}
+                      </div>
+                      <div className="job-actions">
+                        <button
+                          className="ghost"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedJobId(job.id);
+                            setActiveTab("metrics");
+                          }}
+                        >
+                          View logs
+                        </button>
+                        <button
+                          className="danger"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              await api.stopJob(job.id);
+                              updateNotice(`Stopped ${job.id}`);
+                              refreshJobs();
+                            } catch (err: any) {
+                              setError(err.message || "Failed to stop job");
+                            }
+                          }}
+                        >
+                          Stop
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="panel">
+              <div className="panel-header">
+                <h3>Log Source</h3>
+              </div>
+              <div className="form-grid">
+                <label>
+                  Job
+                  <select value={selectedJobId} onChange={(e) => setSelectedJobId(e.target.value)}>
+                    <option value="">Latest</option>
+                    {jobs
+                      .slice()
+                      .sort((a, b) => (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || ""))
+                      .map((job) => (
+                        <option key={job.id} value={job.id}>
+                          {job.id} ({job.type})
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="overview-span">
+            <div className="log-row">
+              <div className="panel">
+                <div className="panel-header">
+                  <h3>Actions Log</h3>
+                  <span className="hint">{lastLogPath || "No log yet"}</span>
+                </div>
+                <pre>{actionsLog.join("\n") || "No entries yet."}</pre>
+              </div>
+              <div className="panel">
+                <div className="panel-header">
+                  <h3>Audit Log</h3>
+                  <span className="hint">{lastAuditPath || "No log yet"}</span>
+                </div>
+                <pre>{auditLog.join("\n") || "No entries yet."}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      )}
+
+      {showSessions && (
+      <section className="section">
+        <div className="section-header">
+          <h2>Session management</h2>
+          <button className="ghost" onClick={refreshSessions}>
+            Refresh
+          </button>
+        </div>
+          <div className="panel-grid">
+          {(sessionsPanel === "sessions-main" || !sessionsPanel) && (
+          <div className="panel" id="sessions-main">
+            <div className="panel-header">
+              <h3>Sessions</h3>
+              <span className="hint">{sessionOptions.length} total</span>
+            </div>
+            <div className="session-list">
+              {sessionOptions.length === 0 && (
+                <p className="muted">No sessions found. Add sessions in the backend.</p>
+              )}
+              {sessionOptions.map((session) => (
+                <div key={session.name} className="session-card">
+                  <div>
+                    <h4>{session.name}</h4>
+                    <p className="meta">
+                      {session.username ? `@${session.username}` : "Unknown"} • {session.phone || "No phone"}
+                    </p>
+                  </div>
+                  <div className={`badge ${session.proxy ? "on" : "off"}`}>
+                    {session.proxy ? "Proxy" : "Direct"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          )}
+
+          {(sessionsPanel === "sessions-main" || !sessionsPanel) && (
+          <div className="panel" id="sessions-manage">
             <div className="panel-header">
               <h3>Session Management</h3>
               <span className="hint">Rename, delete, import</span>
@@ -1839,8 +2272,10 @@ function App() {
               </label>
             </div>
           </div>
+          )}
 
-          <div className="panel">
+          {sessionsPanel === "sessions-tools" && (
+          <div className="panel" id="sessions-tools">
             <div className="panel-header">
               <h3>CSV Merge (Dedupe)</h3>
               <span className="hint">Combine CSVs and remove duplicates</span>
@@ -1869,8 +2304,10 @@ function App() {
               </button>
             </div>
           </div>
+          )}
 
-          <div className="panel">
+          {sessionsPanel === "sessions-tools" && (
+          <div className="panel" id="sessions-proxy">
             <div className="panel-header">
               <h3>Session Proxy</h3>
               <span className="hint">One proxy per session</span>
@@ -1961,8 +2398,10 @@ function App() {
               </div>
             </div>
           </div>
+          )}
 
-          <div className="panel">
+          {sessionsPanel === "sessions-tools" && (
+          <div className="panel" id="sessions-ai">
             <div className="panel-header">
               <h3>AI Profiles</h3>
               <span className="hint">Store multiple providers + models for warmup</span>
@@ -2061,6 +2500,7 @@ function App() {
               </div>
             </div>
           </div>
+          )}
         </div>
       </section>
       )}
@@ -2075,10 +2515,24 @@ function App() {
           </button>
         </div>
         <div className="panel-grid">
-          <div className="panel">
+          <div className="panel" id="preset-form">
             <div className="panel-header">
-              <h3>Create preset</h3>
-              <span className="hint">Timing + safety bundle</span>
+              <div>
+                <h3>{presetEditing ? "Edit preset" : "Create preset"}</h3>
+                <span className="hint">Timing + safety bundle</span>
+              </div>
+              {presetEditing && (
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    const nextKind = presetPanel === "preset-warmup" ? "warmup" : "dm";
+                    setPresetForm({ ...defaultPresetForm, kind: nextKind });
+                    setPresetEditing(false);
+                  }}
+                >
+                  New preset
+                </button>
+              )}
             </div>
             <div className="form-grid">
               <label>
@@ -2094,7 +2548,11 @@ function App() {
                 Preset type
                 <select
                   value={presetForm.kind}
-                  onChange={(e) => setPresetForm({ ...presetForm, kind: e.target.value })}
+                  onChange={(e) => {
+                    const nextKind = e.target.value;
+                    setPresetForm({ ...presetForm, kind: nextKind });
+                    setPresetPanel(nextKind === "warmup" ? "preset-warmup" : "preset-dm");
+                  }}
                 >
                   <option value="dm">DM / Invite / Bulk / Forward</option>
                   <option value="warmup">Warmup</option>
@@ -2295,7 +2753,8 @@ function App() {
             </div>
           </div>
 
-          <div className="panel">
+          {presetPanel !== "preset-warmup" && (
+          <div className="panel" id="preset-dm">
             <div className="panel-header">
               <h3>Saved DM presets</h3>
               <span className="hint">{dmPresets.length} total</span>
@@ -2322,7 +2781,12 @@ function App() {
                 </div>
               ))}
             </div>
-            <div className="panel-header" style={{ marginTop: "16px" }}>
+          </div>
+          )}
+
+          {presetPanel === "preset-warmup" && (
+          <div className="panel" id="preset-warmup">
+            <div className="panel-header">
               <h3>Saved Warmup presets</h3>
               <span className="hint">{warmupPresets.length} total</span>
             </div>
@@ -2354,73 +2818,16 @@ function App() {
               ))}
             </div>
           </div>
+          )}
         </div>
       </section>
       )}
 
+      
+      
       {showWorkflows && (
         <section className="workflow-section">
           <div className="workflow-layout">
-            <div className="panel workflow-palette">
-              <div className="panel-header">
-                <h3>Blocks</h3>
-                <span className="hint">Build your loop</span>
-              </div>
-              <div className="workflow-buttons">
-                <button className="ghost" disabled={workflowHasSession} onClick={() => addWorkflowNode("session")}>
-                  Session
-                </button>
-                <button className="ghost" disabled={!workflowHasSession} onClick={() => addWorkflowNode("wait")}>
-                  Wait
-                </button>
-                <button className="ghost" disabled={!workflowHasSession} onClick={() => addWorkflowNode("dm")}>
-                  DM
-                </button>
-                <button className="ghost" disabled={!workflowHasSession} onClick={() => addWorkflowNode("invite")}>
-                  Invite
-                </button>
-                <button className="ghost" disabled={!workflowHasSession} onClick={() => addWorkflowNode("bulk_add")}>
-                  Bulk add
-                </button>
-                <button className="ghost" disabled={!workflowHasSession} onClick={() => addWorkflowNode("forward")}>
-                  Forward
-                </button>
-                <button className="ghost" disabled={!workflowHasSession} onClick={() => addWorkflowNode("warmup")}>
-                  Warmup
-                </button>
-              </div>
-
-              <p className="workflow-help">
-                {workflowHasSession ? "Session node ready." : "Add a Session node to start."} Use the link icon on a node, then click the target to connect.
-              </p>
-
-              <div className="panel-header">
-                <h3>Saved loops</h3>
-                <span className="hint">{workflows.length} total</span>
-              </div>
-              <div className="session-list">
-                {workflows.length === 0 && <p className="muted">No loops saved yet.</p>}
-                {workflows.map((workflow) => (
-                  <div key={workflow.id} className="session-card">
-                    <div>
-                      <h4>{workflow.name}</h4>
-                      <p className="meta">
-                        {workflow.id} • {workflow.nodes?.length ?? 0} nodes
-                      </p>
-                    </div>
-                    <div className="row">
-                      <button className="ghost" onClick={() => handleWorkflowLoad(workflow)}>
-                        Load
-                      </button>
-                      <button className="danger" onClick={() => handleWorkflowDelete(workflow.id)}>
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
             <div className="panel workflow-canvas-panel">
               <div className="panel-header workflow-header">
                 <div>
@@ -2463,136 +2870,503 @@ function App() {
                   </div>
                 </div>
               </div>
-              <div
-                className="workflow-canvas"
-                ref={canvasRef}
-                onMouseDown={(event) => {
-                  const target = event.target as HTMLElement | null;
-                  if (target && target.closest(".workflow-node")) {
-                    return;
-                  }
-                  setSelectedNodeId(null);
-                  setLinkFrom(null);
-                  setPanning({
-                    startX: event.clientX,
-                    startY: event.clientY,
-                    originX: canvasOffset.x,
-                    originY: canvasOffset.y,
-                  });
-                }}
-                onWheelCapture={handleCanvasWheel}
-              >
-                <div className="workflow-zoom">
-                  <button className="ghost" onClick={() => setZoom((z) => Math.max(0.6, Number((z - 0.1).toFixed(2))))}>−</button>
-                  <button className="ghost" onClick={() => setZoom(1)}>100%</button>
-                  <button className="ghost" onClick={() => setZoom((z) => Math.min(1.6, Number((z + 0.1).toFixed(2))))}>+</button>
-                </div>
-                <div
-                  className="workflow-canvas-inner"
-                  style={{
-                    width: workflowWorld.width,
-                    height: workflowWorld.height,
-                    transform: `translate(${canvasOffset.x}px, ${canvasOffset.y}px) scale(${zoom})`,
-                  }}
-                >
-                  <svg className="workflow-edges">
-                    <defs>
-                      <marker
-                        id="arrow"
-                        markerWidth="10"
-                        markerHeight="10"
-                        refX="8"
-                        refY="3"
-                        orient="auto"
-                      >
-                        <path d="M0,0 L0,6 L9,3 z" fill="var(--wf-edge, rgba(220,223,235,0.8))" />
-                      </marker>
-                    </defs>
-                    {workflowDraft.edges.map((edge) => {
-                      const source = nodeLookup.get(edge.source);
-                      const target = nodeLookup.get(edge.target);
-                      if (!source?.position || !target?.position) return null;
-                      const { x1, y1, x2, y2, c1x, c1y, c2x, c2y } = getEdgePoints(
-                        source.position,
-                        target.position,
-                        { x: workflowWorld.originX, y: workflowWorld.originY }
-                      );
-                      const d = `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`;
+              <div className="workflow-canvas-wrap">
+                <div className="workflow-blocks-panel">
+                  <div className="workflow-blocks">
+                    {[
+                      { type: "session", label: "Session", disabled: workflowHasSession },
+                      { type: "wait", label: "Wait", disabled: !workflowHasSession },
+                      { type: "dm", label: "DM", disabled: !workflowHasSession },
+                      { type: "invite", label: "Invite", disabled: !workflowHasSession },
+                      { type: "bulk_add", label: "Bulk add", disabled: !workflowHasSession },
+                      { type: "forward", label: "Forward", disabled: !workflowHasSession },
+                      { type: "warmup", label: "Warmup", disabled: !workflowHasSession },
+                    ].map((block) => {
+                      const iconSrc = WORKFLOW_NODE_ICONS[block.type];
                       return (
-                        <path
-                          key={edge.id}
-                          d={d}
-                          fill="none"
-                          stroke="var(--wf-edge, rgba(220,223,235,0.75))"
-                          strokeWidth="1.6"
-                          markerEnd="url(#arrow)"
-                        />
+                        <button
+                          key={block.type}
+                          className="workflow-block-btn"
+                          disabled={block.disabled}
+                        aria-label={block.label}
+                          onClick={() => addWorkflowNode(block.type)}
+                        >
+                          {iconSrc ? <img className="workflow-block-icon" src={iconSrc} alt="" aria-hidden="true" /> : null}
+                          <span className="workflow-block-label">{block.label}</span>
+                        </button>
                       );
                     })}
-                  </svg>
+                  </div>
+                </div>
 
-                  {workflowDraft.nodes.map((node) => {
-                    const config = node.config as Record<string, any>;
-                    const presetLabel = typeof config.preset_name === "string" ? config.preset_name : "";
-                    const inputFile = typeof config.input_file === "string" ? config.input_file : "";
-                    const sessionValue = typeof config.session === "string" ? config.session : "";
-                    const loopCount = Number(config.loop_count ?? 1);
-                    const iconSrc = WORKFLOW_NODE_ICONS[node.type];
-                    const nodeLabel = node.type.replace("_", " ");
-                    const sessionLabel = sessionValue
-                      ? `Session: ${sessionValue} • Loops: ${Number.isFinite(loopCount) ? loopCount : 1}`
-                      : "Select session";
-                    const metaLines: string[] = [];
-                    if (node.type === "session") {
-                      metaLines.push(sessionLabel);
-                    } else {
-                      if (presetLabel) metaLines.push(`Preset: ${presetLabel}`);
-                      if (inputFile && node.type !== "warmup") metaLines.push(`CSV: ${inputFile}`);
+                <div className="workflow-sidebar-overlay">
+                  {selectedNode && (
+                    <div className="workflow-overlay-panel">
+                      <div className="panel-header">
+                        <h3>Inspector</h3>
+                        <span className="hint">Configure selected node</span>
+                      </div>
+                      <div className="form-grid">
+                        <label>
+                          Node id
+                          <input type="text" value={selectedNode.id} disabled />
+                        </label>
+                        <label>
+                          Type
+                          <input type="text" value={selectedNode.type} disabled />
+                        </label>
+                        {(() => {
+                          const config = selectedNode.config as Record<string, any>;
+                          const presetValue = typeof config.preset_name === "string" ? config.preset_name : "";
+                          const inputFileValue = typeof config.input_file === "string" ? config.input_file : "";
+
+                          const renderPresetSelect = (options: string[]) => (
+                            <label>
+                              Preset
+                              <select
+                                value={presetValue}
+                                onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { preset_name: e.target.value })}
+                              >
+                                <option value="">Select preset</option>
+                                {options.map((name) => (
+                                  <option key={name} value={name}>
+                                    {name}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          );
+                          const renderInputFile = () => (
+                            <label>
+                              CSV file
+                              <input
+                                type="text"
+                                value={inputFileValue}
+                                onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { input_file: e.target.value })}
+                              />
+                            </label>
+                          );
+                          if (selectedNode.type === "session") {
+                            const sessionValue = typeof config.session === "string" ? config.session : "";
+                            const loopCount = Number(config.loop_count ?? 1);
+                            return (
+                              <>
+                                <label>
+                                  Session
+                                  <select
+                                    value={sessionValue}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { session: e.target.value })}
+                                  >
+                                    <option value="">Select session</option>
+                                    {sessionOptions.map((item) => (
+                                      <option key={item.name} value={item.name}>
+                                        {item.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label>
+                                  Loop count
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    value={Number.isFinite(loopCount) ? loopCount : 1}
+                                    onChange={(e) =>
+                                      updateWorkflowNodeConfig(selectedNode.id, {
+                                        loop_count: Number(e.target.value) || 1,
+                                      })
+                                    }
+                                  />
+                                </label>
+                              </>
+                            );
+                          }
+                          if (selectedNode.type === "wait") {
+                            return (
+                              <>
+                                <label>
+                                  Min seconds
+                                  <input
+                                    type="number"
+                                    value={config.min_seconds ?? 0}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { min_seconds: Number(e.target.value) || 0 })}
+                                  />
+                                </label>
+                                <label>
+                                  Max seconds
+                                  <input
+                                    type="number"
+                                    value={config.max_seconds ?? 0}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { max_seconds: Number(e.target.value) || 0 })}
+                                  />
+                                </label>
+                              </>
+                            );
+                          }
+                          if (selectedNode.type === "dm") {
+                            return (
+                              <>
+                                {renderPresetSelect(presetNames)}
+                                {renderInputFile()}
+                                <label>
+                                  Media path
+                                  <input
+                                    type="text"
+                                    value={config.media_path ?? ""}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
+                                  />
+                                </label>
+                                <label className="toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(config.use_spintax)}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
+                                  />
+                                  Spintax
+                                </label>
+                                <label className="toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(config.spintax_ai)}
+                                    disabled={!config.use_spintax}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
+                                  />
+                                  AI Spintax
+                                </label>
+                                <label>
+                                  AI variations
+                                  <input
+                                    type="number"
+                                    min={2}
+                                    max={12}
+                                    disabled={!config.use_spintax || !config.spintax_ai}
+                                    value={Number.isFinite(Number(config.spintax_variations)) ? Number(config.spintax_variations) : 5}
+                                    onChange={(e) =>
+                                      updateWorkflowNodeConfig(selectedNode.id, {
+                                        spintax_variations: Number(e.target.value) || 5,
+                                      })
+                                    }
+                                  />
+                                </label>
+                                <div className="helper-text">{SPINTAX_HELP}</div>
+                                <label>
+                                  Message
+                                  <textarea
+                                    value={config.message ?? ""}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message: e.target.value })}
+                                  />
+                                </label>
+                              </>
+                            );
+                          }
+                          if (selectedNode.type === "invite") {
+                            return (
+                              <>
+                                {renderPresetSelect(presetNames)}
+                                {renderInputFile()}
+                                <label>
+                                  Invite link
+                                  <input
+                                    type="text"
+                                    value={config.invite_url ?? ""}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { invite_url: e.target.value })}
+                                  />
+                                </label>
+                                <label>
+                                  Media path
+                                  <input
+                                    type="text"
+                                    value={config.media_path ?? ""}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
+                                  />
+                                </label>
+                                <label className="toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(config.use_spintax)}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
+                                  />
+                                  Spintax
+                                </label>
+                                <label className="toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(config.spintax_ai)}
+                                    disabled={!config.use_spintax}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
+                                  />
+                                  AI Spintax
+                                </label>
+                                <label>
+                                  AI variations
+                                  <input
+                                    type="number"
+                                    min={2}
+                                    max={12}
+                                    disabled={!config.use_spintax || !config.spintax_ai}
+                                    value={Number.isFinite(Number(config.spintax_variations)) ? Number(config.spintax_variations) : 5}
+                                    onChange={(e) =>
+                                      updateWorkflowNodeConfig(selectedNode.id, {
+                                        spintax_variations: Number(e.target.value) || 5,
+                                      })
+                                    }
+                                  />
+                                </label>
+                                <div className="helper-text">{SPINTAX_HELP}</div>
+                                <label>
+                                  Message
+                                  <textarea
+                                    value={config.message ?? ""}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message: e.target.value })}
+                                  />
+                                </label>
+                              </>
+                            );
+                          }
+                          if (selectedNode.type === "bulk_add") {
+                            return (
+                              <>
+                                {renderPresetSelect(presetNames)}
+                                {renderInputFile()}
+                                <label>
+                                  Target group/channel
+                                  <input
+                                    type="text"
+                                    value={config.target_ref ?? ""}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { target_ref: e.target.value })}
+                                  />
+                                </label>
+                              </>
+                            );
+                          }
+                          if (selectedNode.type === "forward") {
+                            return (
+                              <>
+                                {renderPresetSelect(presetNames)}
+                                {renderInputFile()}
+                                <label>
+                                  Message link
+                                  <input
+                                    type="text"
+                                    value={config.message_link ?? ""}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message_link: e.target.value })}
+                                  />
+                                </label>
+                                <label>
+                                  Source peer (optional)
+                                  <input
+                                    type="text"
+                                    value={config.source_peer ?? ""}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { source_peer: e.target.value })}
+                                  />
+                                </label>
+                                <label>
+                                  Message id (optional)
+                                  <input
+                                    type="text"
+                                    value={config.message_id ?? ""}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message_id: e.target.value })}
+                                  />
+                                </label>
+                                <label className="toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(config.has_media)}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { has_media: e.target.checked })}
+                                  />
+                                  Has media
+                                </label>
+                                <label className="toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(config.drop_author)}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { drop_author: e.target.checked })}
+                                  />
+                                  Drop forward author
+                                </label>
+                              </>
+                            );
+                          }
+                          if (selectedNode.type === "warmup") {
+                            return (
+                              <>
+                                {renderPresetSelect(warmupPresetNames)}
+                                <label>
+                                  Targets
+                                  <input
+                                    type="text"
+                                    value={config.targets ?? ""}
+                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { targets: e.target.value })}
+                                  />
+                                </label>
+                              </>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="workflow-overlay-panel">
+                    <div className="panel-header">
+                      <h3>Saved loops</h3>
+                      <span className="hint">{workflows.length} total</span>
+                    </div>
+                    <div className="session-list">
+                      {workflows.length === 0 && <p className="muted">No loops saved yet.</p>}
+                      {workflows.map((workflow) => (
+                        <div key={workflow.id} className="session-card">
+                          <div>
+                            <h4>{workflow.name}</h4>
+                            <p className="meta">
+                              {workflow.id} • {workflow.nodes?.length ?? 0} nodes
+                            </p>
+                          </div>
+                          <div className="row">
+                            <button className="ghost" onClick={() => handleWorkflowLoad(workflow)}>
+                              Load
+                            </button>
+                            <button className="danger" onClick={() => handleWorkflowDelete(workflow.id)}>
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  className="workflow-canvas"
+                  ref={canvasRef}
+                  onMouseDown={(event) => {
+                    const target = event.target as HTMLElement | null;
+                    if (target && target.closest(".workflow-node")) {
+                      return;
                     }
-                    return (
-                      <div
-                        key={node.id}
-                        className={`workflow-node${selectedNodeId === node.id ? " selected" : ""}${
-                          linkFrom === node.id ? " linking" : ""
-                        }`}
-                        style={{
-                          left: (node.position?.x ?? 0) + workflowWorld.originX,
-                          top: (node.position?.y ?? 0) + workflowWorld.originY,
-                        }}
-                        onMouseDown={(event) => {
-                          event.stopPropagation();
-                          handleNodeMouseDown(event, node);
-                        }}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleNodeClick(event, node);
-                        }}
-                      >
-                        <div className="node-actions">
-                          <button
-                            className="node-btn"
-                            title={workflowDraft.edges.some((edge) => edge.source === node.id) ? "Unlink" : "Link"}
-                            aria-label={workflowDraft.edges.some((edge) => edge.source === node.id) ? "Unlink" : "Link"}
-                            onMouseDown={(event) => event.stopPropagation()}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              if (workflowDraft.edges.some((edge) => edge.source === node.id)) {
-                                removeWorkflowLinks(node.id);
-                                return;
-                              }
-                              if (linkFrom === node.id) {
-                                setLinkFrom(null);
-                                return;
-                              }
-                              setLinkFrom(node.id);
-                            }}
-                          >
-                            {workflowDraft.edges.some((edge) => edge.source === node.id) ? "⛓️‍💥" : "🔗"}
-                          </button>
-                          <button
-                            className="node-btn danger"
-                            title="Delete"
-                            aria-label="Delete"
+                    setSelectedNodeId(null);
+                    setLinkFrom(null);
+                    setPanning({
+                      startX: event.clientX,
+                      startY: event.clientY,
+                      originX: canvasOffset.x,
+                      originY: canvasOffset.y,
+                    });
+                  }}
+                  onWheelCapture={handleCanvasWheel}
+                >
+                  <div className="workflow-zoom">
+                    <button className="ghost" onClick={() => setZoom((z) => Math.max(0.6, Number((z - 0.1).toFixed(2))))}>−</button>
+                    <button className="ghost" onClick={() => setZoom(1)}>100%</button>
+                    <button className="ghost" onClick={() => setZoom((z) => Math.min(1.6, Number((z + 0.1).toFixed(2))))}>+</button>
+                  </div>
+                  <div
+                    className="workflow-canvas-inner"
+                    style={{
+                      width: workflowWorld.width,
+                      height: workflowWorld.height,
+                      transform: `translate(${canvasOffset.x}px, ${canvasOffset.y}px) scale(${zoom})`,
+                    }}
+                  >
+                    <svg className="workflow-edges">
+                      <defs>
+                        <marker
+                          id="arrow"
+                          markerWidth="10"
+                          markerHeight="10"
+                          refX="8"
+                          refY="3"
+                          orient="auto"
+                        >
+                          <path d="M0,0 L0,6 L9,3 z" fill="var(--wf-edge, rgba(220,223,235,0.8))" />
+                        </marker>
+                      </defs>
+                      {workflowDraft.edges.map((edge) => {
+                        const source = nodeLookup.get(edge.source);
+                        const target = nodeLookup.get(edge.target);
+                        if (!source?.position || !target?.position) return null;
+                        const { x1, y1, x2, y2, c1x, c1y, c2x, c2y } = getEdgePoints(
+                          source.position,
+                          target.position,
+                          { x: workflowWorld.originX, y: workflowWorld.originY }
+                        );
+                        const d = `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`;
+                        return (
+                          <path
+                            key={edge.id}
+                            d={d}
+                            fill="none"
+                            stroke="var(--wf-edge, rgba(220,223,235,0.75))"
+                            strokeWidth="1.6"
+                            markerEnd="url(#arrow)"
+                          />
+                        );
+                      })}
+                    </svg>
+
+                    {workflowDraft.nodes.map((node) => {
+                      const config = node.config as Record<string, any>;
+                      const presetLabel = typeof config.preset_name === "string" ? config.preset_name : "";
+                      const inputFile = typeof config.input_file === "string" ? config.input_file : "";
+                      const sessionValue = typeof config.session === "string" ? config.session : "";
+                      const loopCount = Number(config.loop_count ?? 1);
+                      const iconSrc = WORKFLOW_NODE_ICONS[node.type];
+                      const nodeLabel = node.type.replace("_", " ");
+                      const sessionLabel = sessionValue
+                        ? `Session: ${sessionValue} • Loops: ${Number.isFinite(loopCount) ? loopCount : 1}`
+                        : "Select session";
+                      const metaLines: string[] = [];
+                      if (node.type === "session") {
+                        metaLines.push(sessionLabel);
+                      } else {
+                        if (presetLabel) metaLines.push(`Preset: ${presetLabel}`);
+                        if (inputFile && node.type !== "warmup") metaLines.push(`CSV: ${inputFile}`);
+                      }
+                      return (
+                        <div
+                          key={node.id}
+                          className={`workflow-node${selectedNodeId === node.id ? " selected" : ""}${
+                            linkFrom === node.id ? " linking" : ""
+                          }`}
+                          style={{
+                            left: (node.position?.x ?? 0) + workflowWorld.originX,
+                            top: (node.position?.y ?? 0) + workflowWorld.originY,
+                          }}
+                          onMouseDown={(event) => {
+                            event.stopPropagation();
+                            handleNodeMouseDown(event, node);
+                          }}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleNodeClick(event, node);
+                          }}
+                        >
+                          <div className="node-actions">
+                            <button
+                              className="node-btn"
+                              title={workflowDraft.edges.some((edge) => edge.source === node.id) ? "Unlink" : "Link"}
+                              aria-label={workflowDraft.edges.some((edge) => edge.source === node.id) ? "Unlink" : "Link"}
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                if (workflowDraft.edges.some((edge) => edge.source === node.id)) {
+                                  removeWorkflowLinks(node.id);
+                                  return;
+                                }
+                                if (linkFrom === node.id) {
+                                  setLinkFrom(null);
+                                  return;
+                                }
+                                setLinkFrom(node.id);
+                              }}
+                            >
+                              {workflowDraft.edges.some((edge) => edge.source === node.id) ? "⛓️‍💥" : "🔗"}
+                            </button>
+                            <button
+                              className="node-btn danger"
+                              title="Delete"
+                              aria-label="Delete"
                               onMouseDown={(event) => event.stopPropagation()}
                               onClick={(event) => {
                                 event.stopPropagation();
@@ -2601,352 +3375,43 @@ function App() {
                             >
                               ×
                             </button>
+                          </div>
+                          {iconSrc ? <img className="node-icon" src={iconSrc} alt="" aria-hidden="true" /> : null}
+                          <div className="node-caption">
+                            <div className="node-title">{nodeLabel}</div>
+                            {metaLines.map((line) => (
+                              <div key={line} className="node-subtitle">
+                                {line}
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                        {iconSrc ? <img className="node-icon" src={iconSrc} alt="" aria-hidden="true" /> : null}
-                        <div className="node-caption">
-                          <div className="node-title">{nodeLabel}</div>
-                          {metaLines.map((line) => (
-                            <div key={line} className="node-subtitle">
-                              {line}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
-            </div>
-
-            <div className="panel workflow-inspector">
-              <div className="panel-header">
-                <h3>Inspector</h3>
-                <span className="hint">Configure selected node</span>
-              </div>
-              {selectedNode ? (
-                <div className="form-grid">
-                  <label>
-                    Node id
-                    <input type="text" value={selectedNode.id} disabled />
-                  </label>
-                  <label>
-                    Type
-                    <input type="text" value={selectedNode.type} disabled />
-                  </label>
-                  {(() => {
-                    const config = selectedNode.config as Record<string, any>;
-                    const presetValue = typeof config.preset_name === "string" ? config.preset_name : "";
-                    const inputFileValue = typeof config.input_file === "string" ? config.input_file : "";
-                    
-                    const renderPresetSelect = (options: string[]) => (
-                      <label>
-                        Preset
-                        <select
-                          value={presetValue}
-                          onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { preset_name: e.target.value })}
-                        >
-                          <option value="">Select preset</option>
-                          {options.map((name) => (
-                            <option key={name} value={name}>
-                              {name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    );
-                    const renderInputFile = () => (
-                      <label>
-                        CSV file
-                        <input
-                          type="text"
-                          value={inputFileValue}
-                          onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { input_file: e.target.value })}
-                        />
-                      </label>
-                    );
-                    if (selectedNode.type === "session") {
-                      const sessionValue = typeof config.session === "string" ? config.session : "";
-                      const loopCount = Number(config.loop_count ?? 1);
-                      return (
-                        <>
-                          <label>
-                            Session
-                            <select
-                              value={sessionValue}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { session: e.target.value })}
-                            >
-                              <option value="">Select session</option>
-                              {sessionOptions.map((item) => (
-                                <option key={item.name} value={item.name}>
-                                  {item.name}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label>
-                            Loop count
-                            <input
-                              type="number"
-                              min={1}
-                              value={Number.isFinite(loopCount) ? loopCount : 1}
-                              onChange={(e) =>
-                                updateWorkflowNodeConfig(selectedNode.id, {
-                                  loop_count: Number(e.target.value) || 1,
-                                })
-                              }
-                            />
-                          </label>
-                        </>
-                      );
-                    }
-                    if (selectedNode.type === "wait") {
-                      return (
-                        <>
-                          <label>
-                            Min seconds
-                            <input
-                              type="number"
-                              value={config.min_seconds ?? 0}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { min_seconds: Number(e.target.value) || 0 })}
-                            />
-                          </label>
-                          <label>
-                            Max seconds
-                            <input
-                              type="number"
-                              value={config.max_seconds ?? 0}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { max_seconds: Number(e.target.value) || 0 })}
-                            />
-                          </label>
-                        </>
-                      );
-                    }
-                    if (selectedNode.type === "dm") {
-                      return (
-                        <>
-                          {renderPresetSelect(presetNames)}
-                          {renderInputFile()}
-                          <label>
-                            Media path
-                            <input
-                              type="text"
-                              value={config.media_path ?? ""}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
-                            />
-                          </label>
-                          <label className="toggle">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(config.use_spintax)}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
-                            />
-                            Spintax
-                          </label>
-                          <label className="toggle">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(config.spintax_ai)}
-                              disabled={!config.use_spintax}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
-                            />
-                            AI Spintax
-                          </label>
-                          <label>
-                            AI variations
-                            <input
-                              type="number"
-                              min={2}
-                              max={12}
-                              disabled={!config.use_spintax || !config.spintax_ai}
-                              value={Number.isFinite(Number(config.spintax_variations)) ? Number(config.spintax_variations) : 5}
-                              onChange={(e) =>
-                                updateWorkflowNodeConfig(selectedNode.id, {
-                                  spintax_variations: Number(e.target.value) || 5,
-                                })
-                              }
-                            />
-                          </label>
-                          <div className="helper-text">{SPINTAX_HELP}</div>
-                          <label>
-                            Message
-                            <textarea
-                              value={config.message ?? ""}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message: e.target.value })}
-                            />
-                          </label>
-                        </>
-                      );
-                    }
-                    if (selectedNode.type === "invite") {
-                      return (
-                        <>
-                          {renderPresetSelect(presetNames)}
-                          {renderInputFile()}
-                          <label>
-                            Invite link
-                            <input
-                              type="text"
-                              value={config.invite_url ?? ""}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { invite_url: e.target.value })}
-                            />
-                          </label>
-                          <label>
-                            Media path
-                            <input
-                              type="text"
-                              value={config.media_path ?? ""}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
-                            />
-                          </label>
-                          <label className="toggle">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(config.use_spintax)}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
-                            />
-                            Spintax
-                          </label>
-                          <label className="toggle">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(config.spintax_ai)}
-                              disabled={!config.use_spintax}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
-                            />
-                            AI Spintax
-                          </label>
-                          <label>
-                            AI variations
-                            <input
-                              type="number"
-                              min={2}
-                              max={12}
-                              disabled={!config.use_spintax || !config.spintax_ai}
-                              value={Number.isFinite(Number(config.spintax_variations)) ? Number(config.spintax_variations) : 5}
-                              onChange={(e) =>
-                                updateWorkflowNodeConfig(selectedNode.id, {
-                                  spintax_variations: Number(e.target.value) || 5,
-                                })
-                              }
-                            />
-                          </label>
-                          <div className="helper-text">{SPINTAX_HELP}</div>
-                          <label>
-                            Message
-                            <textarea
-                              value={config.message ?? ""}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message: e.target.value })}
-                            />
-                          </label>
-                        </>
-                      );
-                    }
-                    if (selectedNode.type === "bulk_add") {
-                      return (
-                        <>
-                          {renderPresetSelect(presetNames)}
-                          {renderInputFile()}
-                          <label>
-                            Target group/channel
-                            <input
-                              type="text"
-                              value={config.target_ref ?? ""}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { target_ref: e.target.value })}
-                            />
-                          </label>
-                        </>
-                      );
-                    }
-                    if (selectedNode.type === "forward") {
-                      return (
-                        <>
-                          {renderPresetSelect(presetNames)}
-                          {renderInputFile()}
-                          <label>
-                            Message link
-                            <input
-                              type="text"
-                              value={config.message_link ?? ""}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message_link: e.target.value })}
-                            />
-                          </label>
-                          <label>
-                            Source peer (optional)
-                            <input
-                              type="text"
-                              value={config.source_peer ?? ""}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { source_peer: e.target.value })}
-                            />
-                          </label>
-                          <label>
-                            Message id (optional)
-                            <input
-                              type="text"
-                              value={config.message_id ?? ""}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message_id: e.target.value })}
-                            />
-                          </label>
-                          <label className="toggle">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(config.has_media)}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { has_media: e.target.checked })}
-                            />
-                            Has media
-                          </label>
-                          <label className="toggle">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(config.drop_author)}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { drop_author: e.target.checked })}
-                            />
-                            Drop forward author
-                          </label>
-                        </>
-                      );
-                    }
-                    if (selectedNode.type === "warmup") {
-                      return (
-                        <>
-                          {renderPresetSelect(warmupPresetNames)}
-                          <label>
-                            Targets
-                            <input
-                              type="text"
-                              value={config.targets ?? ""}
-                              onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { targets: e.target.value })}
-                            />
-                          </label>
-                        </>
-                      );
-                    }
-                    return null;
-                  })()}
-                </div>
-              ) : (
-                <p className="muted">Select a node to edit its settings.</p>
-              )}
             </div>
           </div>
         </section>
       )}
 
-      {showSingle && (
+{showSingle && (
       <section className="section">
         <div className="section-header">
           <h2>Single-Account Campaigns</h2>
-          <span className="hint">DM, invite, add, forward, profile</span>
+          <span className="hint">Pick a campaign type and run it fast</span>
         </div>
-        <div className="panel-grid">
-          <div className="panel">
+        <div className="panel-grid single-layout">
+          <div className="panel single-session-panel">
             <div className="panel-header">
-              <h3>Direct Message</h3>
-              <span className="hint">CSV → DM</span>
+              <h3>Session</h3>
+              <span className="hint">{singleSession ? "Active session" : "Pick a session"}</span>
             </div>
             <div className="form-grid">
               <label>
-                Session
-                <select value={dmForm.session} onChange={(e) => setDmForm({ ...dmForm, session: e.target.value })}>
+                Active session
+                <select value={singleSession} onChange={(e) => setSingleSession(e.target.value)}>
                   <option value="">Select session</option>
                   {sessionOptions.map((session) => (
                     <option key={session.name} value={session.name}>
@@ -2955,6 +3420,15 @@ function App() {
                   ))}
                 </select>
               </label>
+            </div>
+          </div>
+          {singlePanel === "dm" && (
+          <div className="panel single-panel">
+            <div className="panel-header">
+              <h3>Direct Message</h3>
+              <span className="hint">CSV → DM</span>
+            </div>
+            <div className="form-grid">
               <label>
                 Preset
                 <select value={dmForm.preset_name} onChange={(e) => setDmForm({ ...dmForm, preset_name: e.target.value })}>
@@ -3054,24 +3528,15 @@ function App() {
               </button>
             </div>
           </div>
+          )}
 
-          <div className="panel">
+          {singlePanel === "invite" && (
+          <div className="panel single-panel">
             <div className="panel-header">
               <h3>Invite Link DM</h3>
               <span className="hint">DM invite to group/channel</span>
             </div>
             <div className="form-grid">
-              <label>
-                Session
-                <select value={inviteForm.session} onChange={(e) => setInviteForm({ ...inviteForm, session: e.target.value })}>
-                  <option value="">Select session</option>
-                  {sessionOptions.map((session) => (
-                    <option key={session.name} value={session.name}>
-                      {session.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <label>
                 Preset
                 <select value={inviteForm.preset_name} onChange={(e) => setInviteForm({ ...inviteForm, preset_name: e.target.value })}>
@@ -3181,24 +3646,15 @@ function App() {
               </button>
             </div>
           </div>
+          )}
 
-          <div className="panel">
+          {singlePanel === "bulk_add" && (
+          <div className="panel single-panel">
             <div className="panel-header">
               <h3>Bulk Add</h3>
               <span className="hint">Invite users to group</span>
             </div>
             <div className="form-grid">
-              <label>
-                Session
-                <select value={bulkAddForm.session} onChange={(e) => setBulkAddForm({ ...bulkAddForm, session: e.target.value })}>
-                  <option value="">Select session</option>
-                  {sessionOptions.map((session) => (
-                    <option key={session.name} value={session.name}>
-                      {session.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <label>
                 Preset
                 <select value={bulkAddForm.preset_name} onChange={(e) => setBulkAddForm({ ...bulkAddForm, preset_name: e.target.value })}>
@@ -3245,24 +3701,15 @@ function App() {
               </button>
             </div>
           </div>
+          )}
 
-          <div className="panel">
+          {singlePanel === "forward" && (
+          <div className="panel single-panel">
             <div className="panel-header">
               <h3>Forward Message</h3>
               <span className="hint">Forward from source to users</span>
             </div>
             <div className="form-grid">
-              <label>
-                Session
-                <select value={forwardForm.session} onChange={(e) => setForwardForm({ ...forwardForm, session: e.target.value })}>
-                  <option value="">Select session</option>
-                  {sessionOptions.map((session) => (
-                    <option key={session.name} value={session.name}>
-                      {session.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <label>
                 Preset
                 <select value={forwardForm.preset_name} onChange={(e) => setForwardForm({ ...forwardForm, preset_name: e.target.value })}>
@@ -3348,24 +3795,15 @@ function App() {
               </button>
             </div>
           </div>
+          )}
 
-          <div className="panel">
+          {singlePanel === "profile" && (
+          <div className="panel single-panel">
             <div className="panel-header">
               <h3>Profile Rotation</h3>
               <span className="hint">Update name/bio/photo</span>
             </div>
             <div className="form-grid">
-              <label>
-                Session
-                <select value={profileForm.session} onChange={(e) => setProfileForm({ ...profileForm, session: e.target.value })}>
-                  <option value="">Select session</option>
-                  {sessionOptions.map((session) => (
-                    <option key={session.name} value={session.name}>
-                      {session.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <label>
                 First name
                 <input
@@ -3420,9 +3858,10 @@ function App() {
               </button>
             </div>
           </div>
+          )}
 
-
-          <div className="panel">
+          {singlePanel === "warmup" && (
+          <div className="panel single-panel">
             <div className="panel-header">
               <h3>Warmup</h3>
               <span className="hint">Group-only warmup with AI context</span>
@@ -3431,17 +3870,6 @@ function App() {
               <p className="hint">
                 Warmup mode is defined by the preset (React / Reply / Message). Uses the last 50 messages for context and falls back to reactions if no AI profile is available.
               </p>
-              <label>
-                Session
-                <select value={warmupForm.session} onChange={(e) => setWarmupForm({ ...warmupForm, session: e.target.value })}>
-                  <option value="">Select session</option>
-                  {sessionOptions.map((session) => (
-                    <option key={session.name} value={session.name}>
-                      {session.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <label>
                 Targets (group @usernames)
                 <input
@@ -3495,6 +3923,7 @@ function App() {
               </button>
             </div>
           </div>
+          )}
         </div>
       </section>
       )}
@@ -3535,7 +3964,8 @@ function App() {
             </div>
           </div>
 
-          <div className="panel">
+          {multiPanel === "multi-dm" && (
+          <div className="panel" id="multi-dm">
             <div className="panel-header">
               <h3>Multi DM</h3>
               <span className="hint">All sessions DM CSV</span>
@@ -3640,8 +4070,10 @@ function App() {
               </button>
             </div>
           </div>
+          )}
 
-          <div className="panel">
+          {multiPanel === "multi-invite" && (
+          <div className="panel" id="multi-invite">
             <div className="panel-header">
               <h3>Multi Invite DM</h3>
               <span className="hint">Invite link + message</span>
@@ -3755,8 +4187,10 @@ function App() {
               </button>
             </div>
           </div>
+          )}
 
-          <div className="panel">
+          {multiPanel === "multi-bulk" && (
+          <div className="panel" id="multi-bulk">
             <div className="panel-header">
               <h3>Multi Bulk Add</h3>
               <span className="hint">Add users with multiple accounts</span>
@@ -3809,8 +4243,10 @@ function App() {
               </button>
             </div>
           </div>
+          )}
 
-          <div className="panel">
+          {multiPanel === "multi-forward" && (
+          <div className="panel" id="multi-forward">
             <div className="panel-header">
               <h3>Multi Forward</h3>
               <span className="hint">Forward from source with many accounts</span>
@@ -3901,8 +4337,10 @@ function App() {
               </button>
             </div>
           </div>
+          )}
 
-          <div className="panel">
+          {multiPanel === "multi-profile" && (
+          <div className="panel" id="multi-profile">
             <div className="panel-header">
               <h3>Multi Profile Rotation</h3>
               <span className="hint">Apply profile changes to each session</span>
@@ -3975,9 +4413,11 @@ function App() {
               </button>
             </div>
           </div>
+          )}
 
 
-          <div className="panel">
+          {multiPanel === "multi-warmup" && (
+          <div className="panel" id="multi-warmup">
             <div className="panel-header">
               <h3>Multi Warmup</h3>
               <span className="hint">Group-only warmup across selected sessions</span>
@@ -4036,108 +4476,118 @@ function App() {
               </button>
             </div>
           </div>
-        </div>
-      </section>
-      )}
-
-      {showJobs && (
-      <section className="section">
-        <div className="section-header">
-          <h2>Jobs</h2>
-          <button className="ghost" onClick={refreshJobs}>
-            Refresh
-          </button>
-        </div>
-        <div className="panel">
-          {jobs.length === 0 ? (
-            <p className="muted">No running jobs.</p>
-          ) : (
-            <div className="job-list">
-              {jobs.map((job) => (
-                <div key={job.id} className="job-card" onClick={() => setSelectedJobId(job.id)}>
-                  <div>
-                    <h4>{job.type}</h4>
-                    <p className="meta">{job.id}</p>
-                    <p className="meta">Status: {job.status}</p>
-                    {job.error && <p className="meta error">Error: {job.error}</p>}
-                  </div>
-                  <div className="job-actions">
-                    <button
-                      className="ghost"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedJobId(job.id);
-                        setActiveTab("logs");
-                      }}
-                    >
-                      View logs
-                    </button>
-                    {job.status === "running" && (
-                      <button
-                        className="danger"
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          try {
-                            await api.stopJob(job.id);
-                            updateNotice(`Stopped ${job.id}`);
-                            refreshJobs();
-                          } catch (err: any) {
-                            setError(err.message || "Failed to stop job");
-                          }
-                        }}
-                      >
-                        Stop
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
           )}
         </div>
       </section>
       )}
 
-      {showLogs && (
-      <section className="section logs">
-        <div className="panel">
-          <div className="panel-header">
-            <h3>Log Source</h3>
-            <button className="ghost" onClick={refreshLogs}>Refresh</button>
+      {showMetrics && (
+      <section className="section">
+        <div className="section-header">
+          <h2>Metrics</h2>
+          <button
+            className="ghost"
+            onClick={() => {
+              refreshJobs();
+              refreshLogs();
+            }}
+          >
+            Refresh
+          </button>
+        </div>
+        <div className="panel-grid">
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Jobs</h3>
+              <span className="hint">{jobs.length} total</span>
+            </div>
+            {jobs.length === 0 ? (
+              <p className="muted">No jobs yet.</p>
+            ) : (
+              <div className="job-list">
+                {jobs.map((job) => (
+                  <div key={job.id} className="job-card" onClick={() => setSelectedJobId(job.id)}>
+                    <div>
+                      <h4>{job.type}</h4>
+                      <p className="meta">{job.id}</p>
+                      <p className="meta">Status: {job.status}</p>
+                      {job.error && <p className="meta error">Error: {job.error}</p>}
+                    </div>
+                    <div className="job-actions">
+                      <button
+                        className="ghost"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedJobId(job.id);
+                        }}
+                      >
+                        View logs
+                      </button>
+                      {job.status === "running" && (
+                        <button
+                          className="danger"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              await api.stopJob(job.id);
+                              updateNotice(`Stopped ${job.id}`);
+                              refreshJobs();
+                            } catch (err: any) {
+                              setError(err.message || "Failed to stop job");
+                            }
+                          }}
+                        >
+                          Stop
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          <div className="form-grid">
-            <label>
-              Job
-              <select value={selectedJobId} onChange={(e) => setSelectedJobId(e.target.value)}>
-                <option value="">Latest</option>
-                {jobs
-                  .slice()
-                  .sort((a, b) => (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || ""))
-                  .map((job) => (
-                    <option key={job.id} value={job.id}>
-                      {job.id} ({job.type})
-                    </option>
-                  ))}
-              </select>
-            </label>
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Log Source</h3>
+            </div>
+            <div className="form-grid">
+              <label>
+                Job
+                <select value={selectedJobId} onChange={(e) => setSelectedJobId(e.target.value)}>
+                  <option value="">Latest</option>
+                  {jobs
+                    .slice()
+                    .sort((a, b) => (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || ""))
+                    .map((job) => (
+                      <option key={job.id} value={job.id}>
+                        {job.id} ({job.type})
+                      </option>
+                    ))}
+                </select>
+              </label>
+            </div>
           </div>
         </div>
-        <div className="panel">
-          <div className="panel-header">
-            <h3>Actions Log</h3>
-            <span className="hint">{lastLogPath || "No log yet"}</span>
+        <div className="log-row">
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Actions Log</h3>
+              <span className="hint">{lastLogPath || "No log yet"}</span>
+            </div>
+            <pre>{actionsLog.join("\n") || "No entries yet."}</pre>
           </div>
-          <pre>{actionsLog.join("\n") || "No entries yet."}</pre>
-        </div>
-        <div className="panel">
-          <div className="panel-header">
-            <h3>Audit Log</h3>
-            <span className="hint">{lastAuditPath || "No log yet"}</span>
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Audit Log</h3>
+              <span className="hint">{lastAuditPath || "No log yet"}</span>
+            </div>
+            <pre>{auditLog.join("\n") || "No entries yet."}</pre>
           </div>
-          <pre>{auditLog.join("\n") || "No entries yet."}</pre>
         </div>
       </section>
       )}
+        </div>
+      </main>
     </div>
   );
 }
