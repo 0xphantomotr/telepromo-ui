@@ -821,12 +821,15 @@ select option {
   position: relative;
   flex: 1;
   min-height: 680px;
+  display: grid;
 }
 
 .workflow-blocks-panel {
-  position: absolute;
-  top: 12px;
-  left: 12px;
+  grid-area: 1 / 1;
+  position: relative;
+  margin: 12px;
+  align-self: start;
+  justify-self: start;
   padding: 6px 8px;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -934,6 +937,7 @@ select option {
 
 .workflow-canvas {
   position: relative;
+  grid-area: 1 / 1;
   flex: 1;
   min-height: 640px;
   border-radius: 20px;
@@ -954,14 +958,27 @@ select option {
 }
 
 .workflow-sidebar-overlay {
-  position: absolute;
-  top: 12px;
-  right: 12px;
+  grid-area: 1 / 1;
+  position: relative;
+  margin: 12px;
+  align-self: start;
+  justify-self: end;
   display: flex;
   flex-direction: column;
   gap: 12px;
   width: 260px;
   z-index: 5;
+}
+
+.workflow-inspector-toggles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.workflow-inspector-toggles .toggle {
+  font-size: 0.78rem;
 }
 
 .workflow-overlay-panel {

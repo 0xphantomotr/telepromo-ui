@@ -8,6 +8,12 @@ const WORKFLOW_NODE_WIDTH = 96;
 const WORKFLOW_NODE_HEIGHT = 96;
 const WORKFLOW_PADDING = 220;
 const WORKFLOW_MIN_SIZE = 1200;
+// Keep new nodes clear of the blocks palette overlay (top-left of the canvas).
+const WORKFLOW_NODE_START_X = 40;
+const WORKFLOW_NODE_START_Y = 160;
+const WORKFLOW_NODE_GAP = 24;
+const WORKFLOW_NODE_STEP_X = WORKFLOW_NODE_WIDTH + WORKFLOW_NODE_GAP;
+const WORKFLOW_NODE_STEP_Y = WORKFLOW_NODE_HEIGHT + WORKFLOW_NODE_GAP;
 const NAV_ICONS: Record<string, string> = {
   overview: "/grid.svg",
   sessions: "/id.svg",
@@ -297,7 +303,7 @@ const defaultWorkflowDraft: WorkflowDraft = {
       id: "session1",
       type: "session",
       config: { session: "", loop_count: 1 },
-      position: { x: 40, y: 40 },
+      position: { x: WORKFLOW_NODE_START_X, y: WORKFLOW_NODE_START_Y },
     },
   ],
   edges: [],
@@ -356,12 +362,9 @@ function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
   const [draggingNode, setDraggingNode] = useState<{ id: string; offsetX: number; offsetY: number } | null>(null);
-  const canvasPanelRef = useRef<HTMLDivElement | null>(null);
   const [zoom, setZoom] = useState(1);
   const [canvasOffset, setCanvasOffset] = useState({ x: 0, y: 0 });
   const [panning, setPanning] = useState<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [inspectorPos, setInspectorPos] = useState({ x: 0, y: 0 });
 
   const tabs = [
     { id: "overview", label: "Overview" },
@@ -725,17 +728,25 @@ function App() {
     const model = aiProfileForm.model.trim();
     const apiKey = aiProfileForm.api_key.trim();
 
-    const payloadProfiles = aiProfiles.map((profile) => ({
+    type AiProfilePayload = {
+      id?: string;
+      label: string;
+      provider: string;
+      model: string | null;
+      api_key: string | null;
+    };
+
+    const payloadProfiles: AiProfilePayload[] = aiProfiles.map((profile) => ({
       id: profile.id,
       label: profile.label || "",
       provider: profile.provider,
-      api_key: null,
       model: profile.model || null,
+      api_key: null,
     }));
 
     if (aiEditingId) {
       const idx = payloadProfiles.findIndex((item) => item.id === aiEditingId);
-      const nextProfile = {
+      const nextProfile: AiProfilePayload = {
         id: aiEditingId,
         label: label || payloadProfiles[idx]?.label || provider.toUpperCase(),
         provider,
@@ -1088,6 +1099,74 @@ function App() {
     }
   };
 
+  const isWorkflowPositionFree = (nodes: WorkflowNode[], candidate: { x: number; y: number }) => {
+    const candRect = {
+      x: candidate.x - WORKFLOW_NODE_GAP / 2,
+      y: candidate.y - WORKFLOW_NODE_GAP / 2,
+      w: WORKFLOW_NODE_WIDTH + WORKFLOW_NODE_GAP,
+      h: WORKFLOW_NODE_HEIGHT + WORKFLOW_NODE_GAP,
+    };
+    const overlaps = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
+      a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+    return !nodes.some((node) => {
+      const pos = node.position ?? { x: 0, y: 0 };
+      const rect = { x: pos.x, y: pos.y, w: WORKFLOW_NODE_WIDTH, h: WORKFLOW_NODE_HEIGHT };
+      return overlaps(candRect, rect);
+    });
+  };
+
+  const findWorkflowPlacement = (nodes: WorkflowNode[], anchor: { x: number; y: number }) => {
+    if (isWorkflowPositionFree(nodes, anchor)) {
+      return anchor;
+    }
+
+    const maxCandidates = 200;
+    const offsets: Array<{ x: number; y: number }> = [];
+    let gx = 0;
+    let gy = 0;
+    let step = 1;
+    let dirIndex = 0;
+    const dirs = [
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 },
+      { x: 0, y: -1 },
+    ];
+
+    offsets.push({ x: 0, y: 0 });
+    while (offsets.length < maxCandidates) {
+      for (let repeat = 0; repeat < 2; repeat += 1) {
+        const dir = dirs[dirIndex % dirs.length];
+        for (let i = 0; i < step; i += 1) {
+          gx += dir.x;
+          gy += dir.y;
+          offsets.push({ x: gx, y: gy });
+          if (offsets.length >= maxCandidates) {
+            break;
+          }
+        }
+        dirIndex += 1;
+        if (offsets.length >= maxCandidates) {
+          break;
+        }
+      }
+      step += 1;
+    }
+
+    for (const offset of offsets) {
+      const candidate = {
+        x: anchor.x + offset.x * WORKFLOW_NODE_STEP_X,
+        y: anchor.y + offset.y * WORKFLOW_NODE_STEP_Y,
+      };
+      if (isWorkflowPositionFree(nodes, candidate)) {
+        return candidate;
+      }
+    }
+
+    return anchor;
+  };
+
   const addWorkflowNode = (type: string) => {
     if (type === "session" && workflowDraft.nodes.some((node) => node.type === "session")) {
       setError("Only one Session node is allowed in a humanistic loop.");
@@ -1140,6 +1219,17 @@ function App() {
 
     setWorkflowDraft((draft) => {
       const nextId = !draft.id.trim() && type === "session" ? `wf_${Date.now().toString(36)}` : draft.id;
+      const sessionNode = draft.nodes.find((node) => node.type === "session") || null;
+      const selectedNode = selectedNodeId ? draft.nodes.find((node) => node.id === selectedNodeId) || null : null;
+      const basePos =
+        selectedNode?.position ??
+        sessionNode?.position ??
+        { x: WORKFLOW_NODE_START_X, y: WORKFLOW_NODE_START_Y };
+      const anchor =
+        type === "session"
+          ? { x: WORKFLOW_NODE_START_X, y: WORKFLOW_NODE_START_Y }
+          : { x: basePos.x + WORKFLOW_NODE_STEP_X, y: basePos.y };
+      const position = findWorkflowPlacement(draft.nodes, anchor);
       return {
         ...draft,
         id: nextId,
@@ -1149,10 +1239,7 @@ function App() {
             id,
             type,
             config,
-            position: {
-              x: 40 + draft.nodes.length * 32,
-              y: 40 + draft.nodes.length * 28,
-            },
+            position,
           },
         ],
       };
@@ -1278,28 +1365,12 @@ function App() {
     });
   };
 
-  const handleNodeClick = (event: ReactMouseEvent<HTMLDivElement>, node: WorkflowNode) => {
+  const handleNodeClick = (_event: ReactMouseEvent<HTMLDivElement>, node: WorkflowNode) => {
     if (linkFrom && linkFrom !== node.id) {
       addWorkflowEdge(linkFrom, node.id);
       setLinkFrom(null);
     }
     setSelectedNodeId(node.id);
-    const bounds = canvasPanelRef.current?.getBoundingClientRect();
-    if (bounds) {
-      setInspectorPos({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
-    }
-    setInspectorOpen(true);
-  };
-
-  const handleNodeContextMenu = (event: ReactMouseEvent<HTMLDivElement>, node: WorkflowNode) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setSelectedNodeId(node.id);
-    const bounds = canvasPanelRef.current?.getBoundingClientRect();
-    if (bounds) {
-      setInspectorPos({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
-    }
-    setInspectorOpen(true);
   };
 
   const handleCanvasWheel = (event: React.WheelEvent<HTMLDivElement>) => {
@@ -1340,6 +1411,26 @@ function App() {
       }
     });
 
+    const waitNodes = workflowDraft.nodes.filter((node) => node.type === "wait");
+    waitNodes.forEach((node) => {
+      const config = node.config as Record<string, any>;
+      if (config.min_seconds === "" || config.max_seconds === "") {
+        errors.push(`Wait node ${node.id} needs min/max seconds.`);
+        return;
+      }
+      const minSeconds = Number(config.min_seconds ?? 600);
+      const maxSeconds = Number(config.max_seconds ?? 900);
+      if (!Number.isFinite(minSeconds) || minSeconds < 0) {
+        errors.push(`Wait node ${node.id} needs a valid min seconds value.`);
+      }
+      if (!Number.isFinite(maxSeconds) || maxSeconds < 0) {
+        errors.push(`Wait node ${node.id} needs a valid max seconds value.`);
+      }
+      if (Number.isFinite(minSeconds) && Number.isFinite(maxSeconds) && minSeconds > maxSeconds) {
+        errors.push(`Wait node ${node.id} min seconds must be <= max seconds.`);
+      }
+    });
+
     const actionTypes = new Set(["dm", "invite", "bulk_add", "forward", "warmup"]);
     const actionNodes = workflowDraft.nodes.filter((node) => actionTypes.has(node.type));
     if (actionNodes.length === 0) {
@@ -1360,11 +1451,31 @@ function App() {
         if (!message) {
           errors.push(`DM node ${node.id} needs a message.`);
         }
+        if (config.use_spintax && config.spintax_ai) {
+          if (config.spintax_variations === "") {
+            errors.push(`DM node ${node.id} needs AI variations.`);
+          } else {
+            const variations = Number(config.spintax_variations ?? 5);
+            if (!Number.isFinite(variations) || variations < 2 || variations > 12) {
+              errors.push(`DM node ${node.id} AI variations must be between 2 and 12.`);
+            }
+          }
+        }
       }
       if (node.type === "invite") {
         const invite = typeof config.invite_url === "string" ? config.invite_url.trim() : "";
         if (!invite) {
           errors.push(`Invite node ${node.id} needs an invite link.`);
+        }
+        if (config.use_spintax && config.spintax_ai) {
+          if (config.spintax_variations === "") {
+            errors.push(`Invite node ${node.id} needs AI variations.`);
+          } else {
+            const variations = Number(config.spintax_variations ?? 5);
+            if (!Number.isFinite(variations) || variations < 2 || variations > 12) {
+              errors.push(`Invite node ${node.id} AI variations must be between 2 and 12.`);
+            }
+          }
         }
       }
       if (node.type === "bulk_add") {
@@ -1458,7 +1569,17 @@ function App() {
       return {
         ...node,
         config: nextConfig,
-        position: node.position ?? { x: 40 + idx * 32, y: 40 + idx * 28 },
+        position:
+          node.position ??
+          (() => {
+            const gridIndex = node.type === "session" ? 0 : idx + 1;
+            const col = gridIndex % 4;
+            const row = Math.floor(gridIndex / 4);
+            return {
+              x: WORKFLOW_NODE_START_X + col * WORKFLOW_NODE_STEP_X,
+              y: WORKFLOW_NODE_START_Y + row * WORKFLOW_NODE_STEP_Y,
+            };
+          })(),
       };
     });
     const edges = (workflow.edges || []).map((edge, idx) => ({
@@ -1683,11 +1804,6 @@ function App() {
     } catch (err: any) {
       setError(err.message || "Failed to merge CSVs");
     }
-  };
-
-  const parseMessageId = (value: string) => {
-    const num = Number(value);
-    return Number.isFinite(num) ? num : null;
   };
 
   const parseTargets = (value: string) =>
@@ -2944,7 +3060,12 @@ function App() {
                           );
                           if (selectedNode.type === "session") {
                             const sessionValue = typeof config.session === "string" ? config.session : "";
-                            const loopCount = Number(config.loop_count ?? 1);
+                            const loopCountValue =
+                              config.loop_count === ""
+                                ? ""
+                                : Number.isFinite(Number(config.loop_count))
+                                ? Number(config.loop_count)
+                                : 1;
                             return (
                               <>
                                 <label>
@@ -2966,10 +3087,10 @@ function App() {
                                   <input
                                     type="number"
                                     min={1}
-                                    value={Number.isFinite(loopCount) ? loopCount : 1}
+                                    value={loopCountValue}
                                     onChange={(e) =>
                                       updateWorkflowNodeConfig(selectedNode.id, {
-                                        loop_count: Number(e.target.value) || 1,
+                                        loop_count: e.target.value === "" ? "" : Number(e.target.value),
                                       })
                                     }
                                   />
@@ -2978,28 +3099,56 @@ function App() {
                             );
                           }
                           if (selectedNode.type === "wait") {
+                            const minSecondsValue =
+                              config.min_seconds === ""
+                                ? ""
+                                : Number.isFinite(Number(config.min_seconds))
+                                ? Number(config.min_seconds)
+                                : 600;
+                            const maxSecondsValue =
+                              config.max_seconds === ""
+                                ? ""
+                                : Number.isFinite(Number(config.max_seconds))
+                                ? Number(config.max_seconds)
+                                : 900;
                             return (
                               <>
                                 <label>
                                   Min seconds
                                   <input
                                     type="number"
-                                    value={config.min_seconds ?? 0}
-                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { min_seconds: Number(e.target.value) || 0 })}
+                                    min={0}
+                                    value={minSecondsValue}
+                                    onChange={(e) =>
+                                      updateWorkflowNodeConfig(selectedNode.id, {
+                                        min_seconds: e.target.value === "" ? "" : Number(e.target.value),
+                                      })
+                                    }
                                   />
                                 </label>
                                 <label>
                                   Max seconds
                                   <input
                                     type="number"
-                                    value={config.max_seconds ?? 0}
-                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { max_seconds: Number(e.target.value) || 0 })}
+                                    min={0}
+                                    value={maxSecondsValue}
+                                    onChange={(e) =>
+                                      updateWorkflowNodeConfig(selectedNode.id, {
+                                        max_seconds: e.target.value === "" ? "" : Number(e.target.value),
+                                      })
+                                    }
                                   />
                                 </label>
                               </>
                             );
                           }
                           if (selectedNode.type === "dm") {
+                            const spintaxVariationsValue =
+                              config.spintax_variations === ""
+                                ? ""
+                                : Number.isFinite(Number(config.spintax_variations))
+                                ? Number(config.spintax_variations)
+                                : 5;
                             return (
                               <>
                                 {renderPresetSelect(presetNames)}
@@ -3012,23 +3161,25 @@ function App() {
                                     onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
                                   />
                                 </label>
-                                <label className="toggle">
-                                  <input
-                                    type="checkbox"
-                                    checked={Boolean(config.use_spintax)}
-                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
-                                  />
-                                  Spintax
-                                </label>
-                                <label className="toggle">
-                                  <input
-                                    type="checkbox"
-                                    checked={Boolean(config.spintax_ai)}
-                                    disabled={!config.use_spintax}
-                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
-                                  />
-                                  AI Spintax
-                                </label>
+                                <div className="workflow-inspector-toggles">
+                                  <label className="toggle">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(config.use_spintax)}
+                                      onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
+                                    />
+                                    Spintax
+                                  </label>
+                                  <label className="toggle">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(config.spintax_ai)}
+                                      disabled={!config.use_spintax}
+                                      onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
+                                    />
+                                    AI Spintax
+                                  </label>
+                                </div>
                                 <label>
                                   AI variations
                                   <input
@@ -3036,10 +3187,10 @@ function App() {
                                     min={2}
                                     max={12}
                                     disabled={!config.use_spintax || !config.spintax_ai}
-                                    value={Number.isFinite(Number(config.spintax_variations)) ? Number(config.spintax_variations) : 5}
+                                    value={spintaxVariationsValue}
                                     onChange={(e) =>
                                       updateWorkflowNodeConfig(selectedNode.id, {
-                                        spintax_variations: Number(e.target.value) || 5,
+                                        spintax_variations: e.target.value === "" ? "" : Number(e.target.value),
                                       })
                                     }
                                   />
@@ -3056,6 +3207,12 @@ function App() {
                             );
                           }
                           if (selectedNode.type === "invite") {
+                            const spintaxVariationsValue =
+                              config.spintax_variations === ""
+                                ? ""
+                                : Number.isFinite(Number(config.spintax_variations))
+                                ? Number(config.spintax_variations)
+                                : 5;
                             return (
                               <>
                                 {renderPresetSelect(presetNames)}
@@ -3076,23 +3233,25 @@ function App() {
                                     onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
                                   />
                                 </label>
-                                <label className="toggle">
-                                  <input
-                                    type="checkbox"
-                                    checked={Boolean(config.use_spintax)}
-                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
-                                  />
-                                  Spintax
-                                </label>
-                                <label className="toggle">
-                                  <input
-                                    type="checkbox"
-                                    checked={Boolean(config.spintax_ai)}
-                                    disabled={!config.use_spintax}
-                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
-                                  />
-                                  AI Spintax
-                                </label>
+                                <div className="workflow-inspector-toggles">
+                                  <label className="toggle">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(config.use_spintax)}
+                                      onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
+                                    />
+                                    Spintax
+                                  </label>
+                                  <label className="toggle">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(config.spintax_ai)}
+                                      disabled={!config.use_spintax}
+                                      onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
+                                    />
+                                    AI Spintax
+                                  </label>
+                                </div>
                                 <label>
                                   AI variations
                                   <input
@@ -3100,10 +3259,10 @@ function App() {
                                     min={2}
                                     max={12}
                                     disabled={!config.use_spintax || !config.spintax_ai}
-                                    value={Number.isFinite(Number(config.spintax_variations)) ? Number(config.spintax_variations) : 5}
+                                    value={spintaxVariationsValue}
                                     onChange={(e) =>
                                       updateWorkflowNodeConfig(selectedNode.id, {
-                                        spintax_variations: Number(e.target.value) || 5,
+                                        spintax_variations: e.target.value === "" ? "" : Number(e.target.value),
                                       })
                                     }
                                   />

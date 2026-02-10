@@ -371,6 +371,7 @@ export const api = {
     spintax_variations?: number;
     ai_profile_id?: string;
     media_path?: string;
+    preset_name?: string;
     speed_profile?: string;
     safe_mode?: boolean;
     batch_size?: number;
