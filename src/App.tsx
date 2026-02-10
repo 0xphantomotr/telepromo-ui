@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type CSSProperties } from "react";
 import "./App.css";
-import { api, API_BASE } from "./lib/api";
+import { api } from "./lib/api";
 
 const POLL_INTERVAL_MS = 6000;
 
@@ -8,6 +8,15 @@ const WORKFLOW_NODE_WIDTH = 96;
 const WORKFLOW_NODE_HEIGHT = 96;
 const WORKFLOW_PADDING = 220;
 const WORKFLOW_MIN_SIZE = 1200;
+const NAV_ICONS: Record<string, string> = {
+  overview: "/grid.svg",
+  sessions: "/id.svg",
+  presets: "/craft.svg",
+  workflows: "/loop.svg",
+  single: "/single.svg",
+  multi: "/group.svg",
+  metrics: "/metrics.svg",
+};
 const WORKFLOW_NODE_ICONS: Record<string, string> = {
   session: "/session.svg",
   dm: "/dm.svg",
@@ -19,6 +28,8 @@ const WORKFLOW_NODE_ICONS: Record<string, string> = {
 };
 const SPINTAX_HELP =
   "Spintax picks a random option inside {a|b}. Example: Hey {friend|there}! AI Spintax auto-generates variations using your default AI profile.";
+
+const navIconStyle = (src: string): CSSProperties => ({ "--icon": `url(${src})` } as CSSProperties);
 
 type SessionItem = {
   name: string;
@@ -313,8 +324,6 @@ const buildTargeting = (form: CommonOptions) => ({
 });
 
 function App() {
-  const [connected, setConnected] = useState(false);
-  const [healthMessage, setHealthMessage] = useState("Checking backend...");
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [proxyForm, setProxyForm] = useState<SessionProxyForm>(defaultProxyForm);
   const [aiProfiles, setAiProfiles] = useState<AiProfile[]>([]);
@@ -356,7 +365,7 @@ function App() {
 
   const tabs = [
     { id: "overview", label: "Overview" },
-    { id: "sessions", label: "Session management" },
+    { id: "sessions", label: "Sessions" },
     { id: "presets", label: "Craft presets" },
     { id: "workflows", label: "Humanistic loops" },
     { id: "single", label: "Single" },
@@ -578,7 +587,7 @@ function App() {
   const [presetPanel, setPresetPanel] = useState<string | null>("preset-dm");
   const [sessionsPanel, setSessionsPanel] = useState<string | null>("sessions-main");
   const [sideNavOpen, setSideNavOpen] = useState<{ [key: string]: boolean }>({
-    single: true,
+    single: false,
     multi: false,
     presets: false,
     sessions: false,
@@ -594,17 +603,6 @@ function App() {
 
   const sessionOptions = useMemo(() => sessions, [sessions]);
 
-
-  const refreshHealth = async () => {
-    try {
-      const res = await api.health();
-      setConnected(Boolean(res.ok));
-      setHealthMessage(res.ok ? "Backend online" : "Backend offline");
-    } catch (err: any) {
-      setConnected(false);
-      setHealthMessage("Backend offline");
-    }
-  };
 
   const refreshSessions = async () => {
     try {
@@ -867,7 +865,6 @@ function App() {
   };
 
   useEffect(() => {
-    refreshHealth();
     refreshSessions();
     loadAiSettings();
     refreshPresets();
@@ -875,7 +872,6 @@ function App() {
     refreshLogs();
     refreshJobs();
     const interval = setInterval(() => {
-      refreshHealth();
       refreshLogs();
       refreshJobs();
     }, POLL_INTERVAL_MS);
@@ -1854,33 +1850,29 @@ function App() {
           onClick={() => setSidebarExpanded((prev) => !prev)}
           aria-label={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
         >
-          {sidebarExpanded ? "◀" : "▶"}
+          <span
+            className="sidebar-toggle-icon"
+            style={navIconStyle(sidebarExpanded ? "/navArrowBack.svg" : "/navArrow.svg")}
+          />
         </button>
         <div className="sidebar-brand">
           <p className="eyebrow">Telepromo Control</p>
-          <h1>Campaign Command Center</h1>
-          <p className="subtle">
-            API: <span>{API_BASE}</span>
-          </p>
-        </div>
-        <div className={`status-pill sidebar-status ${connected ? "ok" : "bad"}`}>
-          {connected ? "Connected" : "Offline"}
-          <span className="status-note">{healthMessage}</span>
         </div>
         <nav className="side-nav">
           {tabs.map((tab) => {
             if (tab.id === "single") {
+              const iconSrc = NAV_ICONS.single;
               return (
                 <div key={tab.id} className="side-group">
                   <button
                     className={`side-tab ${activeTab === tab.id ? "active" : ""}`}
-                    data-short="S"
                     onClick={() => {
                       handleSideNavSelect("single");
                       handleSideNavToggle("single");
                     }}
                   >
-                    <span>{tab.label}</span>
+                    <span className="side-icon" style={navIconStyle(iconSrc)} />
+                    <span className="side-label">{tab.label}</span>
                     <span className={`side-caret ${sideNavOpen.single ? "open" : ""}`}>▾</span>
                   </button>
                   {sideNavOpen.single && (
@@ -1900,17 +1892,18 @@ function App() {
               );
             }
             if (tab.id === "sessions") {
+              const iconSrc = NAV_ICONS.sessions;
               return (
                 <div key={tab.id} className="side-group">
                   <button
                     className={`side-tab ${activeTab === tab.id ? "active" : ""}`}
-                    data-short="SM"
                     onClick={() => {
                       handleSideNavSelect("sessions");
                       handleSideNavToggle("sessions");
                     }}
                   >
-                    <span>{tab.label}</span>
+                    <span className="side-icon" style={navIconStyle(iconSrc)} />
+                    <span className="side-label">{tab.label}</span>
                     <span className={`side-caret ${sideNavOpen.sessions ? "open" : ""}`}>▾</span>
                   </button>
                   {sideNavOpen.sessions && (
@@ -1930,17 +1923,18 @@ function App() {
               );
             }
             if (tab.id === "presets") {
+              const iconSrc = NAV_ICONS.presets;
               return (
                 <div key={tab.id} className="side-group">
                   <button
                     className={`side-tab ${activeTab === tab.id ? "active" : ""}`}
-                    data-short="CP"
                     onClick={() => {
                       handleSideNavSelect("presets");
                       handleSideNavToggle("presets");
                     }}
                   >
-                    <span>{tab.label}</span>
+                    <span className="side-icon" style={navIconStyle(iconSrc)} />
+                    <span className="side-label">{tab.label}</span>
                     <span className={`side-caret ${sideNavOpen.presets ? "open" : ""}`}>▾</span>
                   </button>
                   {sideNavOpen.presets && (
@@ -1960,17 +1954,18 @@ function App() {
               );
             }
             if (tab.id === "multi") {
+              const iconSrc = NAV_ICONS.multi;
               return (
                 <div key={tab.id} className="side-group">
                   <button
                     className={`side-tab ${activeTab === tab.id ? "active" : ""}`}
-                    data-short="M"
                     onClick={() => {
                       handleSideNavSelect("multi");
                       handleSideNavToggle("multi");
                     }}
                   >
-                    <span>{tab.label}</span>
+                    <span className="side-icon" style={navIconStyle(iconSrc)} />
+                    <span className="side-label">{tab.label}</span>
                     <span className={`side-caret ${sideNavOpen.multi ? "open" : ""}`}>▾</span>
                   </button>
                   {sideNavOpen.multi && (
@@ -1989,17 +1984,18 @@ function App() {
                 </div>
               );
             }
+            const iconSrc = NAV_ICONS[tab.id] || "/grid.svg";
             return (
               <button
                 key={tab.id}
                 className={`side-tab ${activeTab === tab.id ? "active" : ""}`}
-                data-short={tab.label.slice(0, 2).toUpperCase()}
                 onClick={() => {
                   closeSideNav();
                   handleSideNavSelect(tab.id);
                 }}
               >
-                <span>{tab.label}</span>
+                <span className="side-icon" style={navIconStyle(iconSrc)} />
+                <span className="side-label">{tab.label}</span>
               </button>
             );
           })}
