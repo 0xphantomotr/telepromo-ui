@@ -4,8 +4,8 @@ type ApiResponse<T> = T & { error?: string };
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
-const DEVICE_SIG_HEADER = "X-Telepromo-Device-Sig";
-const DEVICE_TS_HEADER = "X-Telepromo-Device-Ts";
+const DEVICE_SIG_HEADER = "X-TGCampaigner-Device-Sig";
+const DEVICE_TS_HEADER = "X-TGCampaigner-Device-Ts";
 
 const headersToRecord = (headers?: HeadersInit): Record<string, string> => {
   if (!headers) {

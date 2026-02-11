@@ -1,11 +1,11 @@
-# Telepromo UI
+# TGCampaigner UI
 
-Cross‑platform desktop UI for the Telepromo backend.
+Cross-platform desktop UI for the TGCampaigner backend.
 
 ## Requirements
 - Node 20+
 - Tauri prerequisites (Linux: webkit2gtk, rsvg2, etc.)
-- Telepromo backend running locally
+- TGCampaigner backend running locally
 
 ## Run (Dev)
 ```bash
@@ -16,7 +16,7 @@ npm run tauri dev
 ## Backend
 Start the API from the backend repo:
 ```bash
-cd /home/phantom/Documents/telepromo/telegramGatherTool
+cd ../telegramGatherTool
 python3 api_server.py
 ```
 
@@ -30,4 +30,3 @@ VITE_API_BASE=http://127.0.0.1:8000
 - Sessions list
 - Quick DM campaign form
 - Actions & audit log tail
-

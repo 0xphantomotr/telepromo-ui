@@ -4,6 +4,7 @@ export const LICENSE_API_BASE = import.meta.env.VITE_LICENSE_API_BASE || "http:/
 
 type TokenPayload = {
   sub?: string;
+  email?: string;
   dev?: string;
   iat?: number;
   exp?: number;
@@ -75,4 +76,3 @@ export const licensing = {
     return (await invoke("licensing_clear_token")) as boolean;
   },
 };
-

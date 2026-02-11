@@ -23,6 +23,7 @@ const NAV_ICONS: Record<string, string> = {
   single: "/single.svg",
   multi: "/group.svg",
   metrics: "/metrics.svg",
+  license: "/license.svg",
 };
 const WORKFLOW_NODE_ICONS: Record<string, string> = {
   session: "/session.svg",
@@ -335,6 +336,8 @@ function App() {
   const [licenseActive, setLicenseActive] = useState(false);
   const [licenseKeyInput, setLicenseKeyInput] = useState("");
   const [licenseExp, setLicenseExp] = useState<number | null>(null);
+  const [licenseKeyValue, setLicenseKeyValue] = useState<string | null>(null);
+  const [licenseEmail, setLicenseEmail] = useState<string | null>(null);
 
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [proxyForm, setProxyForm] = useState<SessionProxyForm>(defaultProxyForm);
@@ -380,6 +383,7 @@ function App() {
     { id: "single", label: "Single" },
     { id: "multi", label: "Multi" },
     { id: "metrics", label: "Metrics" },
+    { id: "license", label: "License" },
   ];
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -621,27 +625,39 @@ function App() {
     try {
       const token = await licensing.getToken();
       if (!token) {
+        setLicenseKeyValue(null);
+        setLicenseEmail(null);
         setLicenseActive(false);
         setLicenseReady(true);
         return;
       }
       const payload = decodeTokenPayload(token);
       const exp = payload?.exp;
+      const tokenLicense = typeof payload?.sub === "string" ? payload.sub : null;
+      const tokenEmail = typeof payload?.email === "string" ? payload.email : null;
       if (typeof exp !== "number") {
+        setLicenseKeyValue(null);
+        setLicenseEmail(null);
         setLicenseActive(false);
         setLicenseReady(true);
         return;
       }
       const now = Math.floor(Date.now() / 1000);
       if (exp <= now) {
+        setLicenseKeyValue(null);
+        setLicenseEmail(null);
         setLicenseActive(false);
         setLicenseReady(true);
         return;
       }
       setLicenseExp(exp);
+      setLicenseKeyValue(tokenLicense);
+      setLicenseEmail(tokenEmail);
       setLicenseActive(true);
       setLicenseReady(true);
     } catch {
+      setLicenseKeyValue(null);
+      setLicenseEmail(null);
       setLicenseActive(false);
       setLicenseReady(true);
     }
@@ -677,12 +693,15 @@ function App() {
       if (!data.token || typeof data.exp !== "number") {
         throw new Error("Invalid activation response");
       }
+      const payload = decodeTokenPayload(data.token);
       const saved = await licensing.setToken(data.token);
       if (!saved) {
         throw new Error("Failed to store license token");
       }
       setLicenseKeyInput("");
       setLicenseExp(data.exp);
+      setLicenseKeyValue(typeof payload?.sub === "string" ? payload.sub : null);
+      setLicenseEmail(typeof payload?.email === "string" ? payload.email : null);
       setLicenseActive(true);
       setLicenseReady(true);
       setNotice("License activated");
@@ -704,13 +723,17 @@ function App() {
       const payload = decodeTokenPayload(token);
       const exp = payload?.exp;
       const licenseKey = payload?.sub;
+      const tokenEmail = typeof payload?.email === "string" ? payload.email : null;
       if (typeof exp !== "number" || typeof licenseKey !== "string" || !licenseKey.trim()) {
         return;
       }
       const now = Math.floor(Date.now() / 1000);
       setLicenseExp(exp);
+      setLicenseKeyValue(licenseKey);
+      setLicenseEmail(tokenEmail);
       const secondsLeft = exp - now;
-      if (secondsLeft > 6 * 3600) {
+      const needsEmailBackfill = !tokenEmail;
+      if (secondsLeft > 6 * 3600 && !needsEmailBackfill) {
         return;
       }
       const ts = Math.floor(Date.now() / 1000);
@@ -731,8 +754,11 @@ function App() {
       if (!data.token || typeof data.exp !== "number") {
         return;
       }
+      const refreshedPayload = decodeTokenPayload(data.token);
       await licensing.setToken(data.token);
       setLicenseExp(data.exp);
+      setLicenseKeyValue(typeof refreshedPayload?.sub === "string" ? refreshedPayload.sub : null);
+      setLicenseEmail(typeof refreshedPayload?.email === "string" ? refreshedPayload.email : null);
     } catch {
       // Silent: offline is allowed until the current token expires.
     }
@@ -1982,6 +2008,7 @@ function App() {
   const showSingle = activeTab === "single";
   const showMulti = activeTab === "multi";
   const showMetrics = activeTab === "metrics";
+  const showLicense = activeTab === "license";
   const runningJobs = useMemo(() => jobs.filter((job) => job.status === "running"), [jobs]);
 
   const toggleMultiSession = (name: string) => {
@@ -2128,7 +2155,7 @@ function App() {
         <div className="card" style={{ maxWidth: 620, margin: "96px auto" }}>
           <div className="card-title-row" style={{ marginBottom: 18 }}>
             <div>
-              <div className="app-kicker">TELEPROMO CONTROL</div>
+              <div className="app-kicker">TGCAMPAIGNER CONTROL</div>
               <h2 style={{ margin: "8px 0 0 0" }}>Activate your license</h2>
             </div>
           </div>
@@ -2179,7 +2206,7 @@ function App() {
           />
         </button>
         <div className="sidebar-brand">
-          <p className="eyebrow">Telepromo Control</p>
+          <p className="eyebrow">TGCampaigner Control</p>
         </div>
         <nav className="side-nav">
           {tabs.map((tab) => {
@@ -4944,6 +4971,41 @@ function App() {
               <span className="hint">{lastAuditPath || "No log yet"}</span>
             </div>
             <pre>{auditLog.join("\n") || "No entries yet."}</pre>
+          </div>
+        </div>
+      </section>
+      )}
+
+      {showLicense && (
+      <section className="section">
+        <div className="section-header">
+          <h2>License</h2>
+        </div>
+        <div className="panel">
+          <div className="panel-header">
+            <h3>Current machine license</h3>
+          </div>
+          <div className="form-grid">
+            <label>
+              License key
+              <input type="text" value={licenseKeyValue || "Not available"} disabled />
+            </label>
+            <label>
+              Customer email
+              <input type="text" value={licenseEmail || "Not available"} disabled />
+            </label>
+            <label>
+              Token expiry
+              <input
+                type="text"
+                value={licenseExp ? new Date(licenseExp * 1000).toLocaleString() : "Not available"}
+                disabled
+              />
+            </label>
+            <label>
+              Status
+              <input type="text" value={licenseActive ? "Active" : "Inactive"} disabled />
+            </label>
           </div>
         </div>
       </section>

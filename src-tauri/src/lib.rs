@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use tauri::path::BaseDirectory;
 use tauri::Manager;
 
-const KEYRING_SERVICE: &str = "telepromo-control";
+const KEYRING_SERVICE: &str = "tgcampaigner-control";
 const KEY_DEVICE_SK: &str = "device_sk_v1";
 const KEY_LICENSE_TOKEN: &str = "license_token_v1";
 const SECRETS_FILE_NAME: &str = "secrets.json";
