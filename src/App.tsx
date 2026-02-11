@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type CSSProperties } from "react";
 import "./App.css";
 import { api } from "./lib/api";
+import { LICENSE_API_BASE, decodeTokenPayload, isTauri, licensing } from "./lib/license";
 
 const POLL_INTERVAL_MS = 6000;
 
@@ -330,6 +331,11 @@ const buildTargeting = (form: CommonOptions) => ({
 });
 
 function App() {
+  const [licenseReady, setLicenseReady] = useState(false);
+  const [licenseActive, setLicenseActive] = useState(false);
+  const [licenseKeyInput, setLicenseKeyInput] = useState("");
+  const [licenseExp, setLicenseExp] = useState<number | null>(null);
+
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [proxyForm, setProxyForm] = useState<SessionProxyForm>(defaultProxyForm);
   const [aiProfiles, setAiProfiles] = useState<AiProfile[]>([]);
@@ -606,6 +612,132 @@ function App() {
 
   const sessionOptions = useMemo(() => sessions, [sessions]);
 
+  const loadLicense = async () => {
+    if (!isTauri()) {
+      setLicenseActive(true);
+      setLicenseReady(true);
+      return;
+    }
+    try {
+      const token = await licensing.getToken();
+      if (!token) {
+        setLicenseActive(false);
+        setLicenseReady(true);
+        return;
+      }
+      const payload = decodeTokenPayload(token);
+      const exp = payload?.exp;
+      if (typeof exp !== "number") {
+        setLicenseActive(false);
+        setLicenseReady(true);
+        return;
+      }
+      const now = Math.floor(Date.now() / 1000);
+      if (exp <= now) {
+        setLicenseActive(false);
+        setLicenseReady(true);
+        return;
+      }
+      setLicenseExp(exp);
+      setLicenseActive(true);
+      setLicenseReady(true);
+    } catch {
+      setLicenseActive(false);
+      setLicenseReady(true);
+    }
+  };
+
+  const activateLicense = async () => {
+    setError(null);
+    if (!isTauri()) {
+      setError("Licensing is only supported in the desktop app.");
+      return;
+    }
+    const licenseKey = licenseKeyInput.trim();
+    if (!licenseKey) {
+      setError("Enter your license key");
+      return;
+    }
+    try {
+      const devicePub = await licensing.devicePublicKey();
+      if (!devicePub) {
+        setError("Failed to load device identity");
+        return;
+      }
+      const res = await fetch(`${LICENSE_API_BASE}/v1/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ license_key: licenseKey, device_pubkey: devicePub }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Activation failed (${res.status})`);
+      }
+      const data = (await res.json()) as { token?: string; exp?: number };
+      if (!data.token || typeof data.exp !== "number") {
+        throw new Error("Invalid activation response");
+      }
+      const saved = await licensing.setToken(data.token);
+      if (!saved) {
+        throw new Error("Failed to store license token");
+      }
+      setLicenseKeyInput("");
+      setLicenseExp(data.exp);
+      setLicenseActive(true);
+      setLicenseReady(true);
+      setNotice("License activated");
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || "Failed to activate license");
+    }
+  };
+
+  const refreshLicenseIfNeeded = async () => {
+    if (!isTauri()) {
+      return;
+    }
+    try {
+      const token = await licensing.getToken();
+      if (!token) {
+        return;
+      }
+      const payload = decodeTokenPayload(token);
+      const exp = payload?.exp;
+      const licenseKey = payload?.sub;
+      if (typeof exp !== "number" || typeof licenseKey !== "string" || !licenseKey.trim()) {
+        return;
+      }
+      const now = Math.floor(Date.now() / 1000);
+      setLicenseExp(exp);
+      const secondsLeft = exp - now;
+      if (secondsLeft > 6 * 3600) {
+        return;
+      }
+      const ts = Math.floor(Date.now() / 1000);
+      const canonical = `${ts}\nREFRESH\n${licenseKey}`;
+      const sig = await licensing.sign(canonical);
+      if (!sig) {
+        return;
+      }
+      const res = await fetch(`${LICENSE_API_BASE}/v1/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, ts, sig }),
+      });
+      if (!res.ok) {
+        return;
+      }
+      const data = (await res.json()) as { token?: string; exp?: number };
+      if (!data.token || typeof data.exp !== "number") {
+        return;
+      }
+      await licensing.setToken(data.token);
+      setLicenseExp(data.exp);
+    } catch {
+      // Silent: offline is allowed until the current token expires.
+    }
+  };
+
 
   const refreshSessions = async () => {
     try {
@@ -876,6 +1008,13 @@ function App() {
   };
 
   useEffect(() => {
+    loadLicense();
+  }, []);
+
+  useEffect(() => {
+    if (!licenseActive) {
+      return;
+    }
     refreshSessions();
     loadAiSettings();
     refreshPresets();
@@ -887,12 +1026,26 @@ function App() {
       refreshJobs();
     }, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, []);
+  }, [licenseActive]);
 
   useEffect(() => {
+    if (!licenseActive) {
+      return;
+    }
+    refreshLicenseIfNeeded();
+    const interval = setInterval(() => {
+      refreshLicenseIfNeeded();
+    }, 10 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [licenseActive]);
+
+  useEffect(() => {
+    if (!licenseActive) {
+      return;
+    }
     selectedJobRef.current = selectedJobId;
     refreshLogs();
-  }, [selectedJobId]);
+  }, [selectedJobId, licenseActive]);
 
   useEffect(() => {
     const first = sessionOptions[0]?.name;
@@ -1957,6 +2110,60 @@ function App() {
       });
     }
   };
+
+  if (!licenseReady) {
+    return (
+      <div className="page">
+        <div className="card" style={{ maxWidth: 520, margin: "120px auto" }}>
+          <h2 style={{ margin: 0 }}>Loading...</h2>
+          <p style={{ opacity: 0.8 }}>Preparing the app.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!licenseActive) {
+    return (
+      <div className="page">
+        <div className="card" style={{ maxWidth: 620, margin: "96px auto" }}>
+          <div className="card-title-row" style={{ marginBottom: 18 }}>
+            <div>
+              <div className="app-kicker">TELEPROMO CONTROL</div>
+              <h2 style={{ margin: "8px 0 0 0" }}>Activate your license</h2>
+            </div>
+          </div>
+          <p style={{ marginTop: 0, opacity: 0.85 }}>
+            Enter the license key from your purchase email to unlock the app on this machine.
+          </p>
+          <label>
+            License key
+            <input
+              value={licenseKeyInput}
+              onChange={(e) => setLicenseKeyInput(e.target.value)}
+              placeholder="TP-ABCDE-12345-ABCDE-12345"
+              autoFocus
+            />
+          </label>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 14 }}>
+            <button className="primary" onClick={activateLicense}>
+              Activate
+            </button>
+            <div style={{ opacity: 0.7, fontSize: 13 }}>Needs internet once to activate.</div>
+          </div>
+          {error ? (
+            <div className="notice error" style={{ marginTop: 16 }}>
+              {error}
+            </div>
+          ) : null}
+          {licenseExp ? (
+            <div style={{ marginTop: 14, opacity: 0.65, fontSize: 12 }}>
+              Cached token valid until: {new Date(licenseExp * 1000).toLocaleString()}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">

@@ -28,6 +28,46 @@ body {
     #0f1115;
 }
 
+.page {
+  min-height: 100vh;
+  padding: 48px 24px;
+}
+
+.card {
+  background: rgba(12, 14, 20, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 22px;
+  padding: 22px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.card-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.app-kicker {
+  font-size: 0.7rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(248, 246, 243, 0.55);
+}
+
+.notice {
+  border-radius: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(17, 19, 24, 0.75);
+}
+
+.notice.error {
+  border-color: rgba(255, 107, 107, 0.42);
+  background: rgba(255, 107, 107, 0.08);
+  color: rgba(255, 230, 230, 0.96);
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width, 260px) minmax(0, 1fr);

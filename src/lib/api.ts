@@ -1,10 +1,67 @@
+import { licensing, isTauri } from "./license";
+
 type ApiResponse<T> = T & { error?: string };
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
+const DEVICE_SIG_HEADER = "X-Telepromo-Device-Sig";
+const DEVICE_TS_HEADER = "X-Telepromo-Device-Ts";
+
+const headersToRecord = (headers?: HeadersInit): Record<string, string> => {
+  if (!headers) {
+    return {};
+  }
+  if (headers instanceof Headers) {
+    const out: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      out[key] = value;
+    });
+    return out;
+  }
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers);
+  }
+  return headers as Record<string, string>;
+};
+
+const sha256Hex = async (value: string) => {
+  const data = new TextEncoder().encode(value);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+};
+
+const buildAuthHeaders = async (path: string, options?: RequestInit): Promise<Record<string, string>> => {
+  // For browser dev / preview, we often run without Tauri; allow unlicensed requests in that mode.
+  if (!isTauri()) {
+    return {};
+  }
+  const token = await licensing.getToken();
+  if (!token) {
+    return {};
+  }
+  const method = (options?.method || "GET").toUpperCase();
+  const body = typeof options?.body === "string" ? options.body : "";
+  const ts = Math.floor(Date.now() / 1000);
+  const bodyHash = await sha256Hex(body);
+  const canonical = `${ts}\n${method}\n${path}\n${bodyHash}`;
+  const sig = await licensing.sign(canonical);
+  if (!sig) {
+    return {};
+  }
+  return {
+    Authorization: `Bearer ${token}`,
+    [DEVICE_TS_HEADER]: String(ts),
+    [DEVICE_SIG_HEADER]: sig,
+  };
+};
+
 async function request<T>(path: string, options?: RequestInit): Promise<ApiResponse<T>> {
+  const authHeaders = await buildAuthHeaders(path, options);
+  const baseHeaders = headersToRecord(options?.headers);
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...baseHeaders, ...authHeaders },
     ...options,
   });
   if (!res.ok) {
