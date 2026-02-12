@@ -132,6 +132,12 @@ type WarmupForm = {
   preset_name: string;
 };
 
+type SessionFilter = "all" | "proxy" | "direct" | "running";
+
+type SessionView = SessionItem & {
+  running: number;
+};
+
 
 type PresetItem = {
   name: string;
@@ -331,6 +337,512 @@ const buildTargeting = (form: CommonOptions) => ({
   max_users: form.max_users ? toInt(form.max_users, 0) : 0,
 });
 
+const normalizeText = (value: string) => value.trim().toLowerCase();
+
+const sessionMatchesQuery = (session: SessionItem, query: string) => {
+  const q = normalizeText(query);
+  if (!q) return true;
+  const name = normalizeText(session.name);
+  const username = normalizeText(session.username || "");
+  const phone = (session.phone || "").replace(/\s+/g, "");
+  return name.includes(q) || username.includes(q) || phone.includes(q.replace(/\s+/g, ""));
+};
+
+const filterSessions = (sessions: SessionView[], query: string, filter: SessionFilter) =>
+  sessions.filter((session) => {
+    if (!sessionMatchesQuery(session, query)) return false;
+    if (filter === "proxy") return Boolean(session.proxy);
+    if (filter === "direct") return !session.proxy;
+    if (filter === "running") return session.running > 0;
+    return true;
+  });
+
+type PresetKind = "dm" | "warmup";
+
+const normalizePresetKind = (kind?: string) => (normalizeText(kind || "") === "warmup" ? "warmup" : "dm");
+
+const warmupModesLabel = (preset: PresetItem) => {
+  const modes = preset.warmup_modes?.length
+    ? preset.warmup_modes
+    : preset.warmup_mode
+    ? [preset.warmup_mode]
+    : [];
+  const cleaned = (modes || [])
+    .map((mode) => String(mode || "").trim())
+    .filter(Boolean);
+  return cleaned.length ? cleaned.join(", ") : "react";
+};
+
+const presetMatchesQuery = (preset: PresetItem, query: string) => {
+  const q = normalizeText(query);
+  if (!q) return true;
+  const name = normalizeText(preset.name);
+  const kind = normalizeText(preset.kind || "dm");
+  const rateMode = normalizeText(preset.rate_mode || "");
+  const kindNorm = normalizePresetKind(preset.kind);
+  const modes = kindNorm === "warmup" ? normalizeText(warmupModesLabel(preset)) : "";
+  return name.includes(q) || kind.includes(q) || rateMode.includes(q) || (modes ? modes.includes(q) : false);
+};
+
+const presetPrimaryMeta = (preset: PresetItem, kind: PresetKind) => {
+  if (kind === "warmup") {
+    const total = preset.total_messages ?? 0;
+    const min = preset.min_delay ?? 0;
+    const max = preset.max_delay ?? 0;
+    return `Total ${total} • ${min}-${max}s • Modes ${warmupModesLabel(preset)}`;
+  }
+  const users = preset.all_csv_users || !preset.max_users ? "all" : String(preset.max_users);
+  return `Interval ${preset.interval_seconds}s • Rate ${preset.rate_mode} • Users ${users}`;
+};
+
+type SessionSelectProps = {
+  value: string;
+  options: SessionView[];
+  onChange: (next: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+};
+
+function SessionSelect({ value, options, onChange, placeholder = "Select session", disabled }: SessionSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  const selected = useMemo(() => options.find((opt) => opt.name === value) || null, [options, value]);
+  const filtered = useMemo(() => filterSessions(options, query, "all"), [options, query]);
+  const sorted = useMemo(() => {
+    const next = filtered.slice();
+    next.sort((a, b) => {
+      if (b.running !== a.running) return b.running - a.running;
+      const aLast = a.last_used || "";
+      const bLast = b.last_used || "";
+      if (bLast !== aLast) return bLast.localeCompare(aLast);
+      return a.name.localeCompare(b.name);
+    });
+    return next;
+  }, [filtered]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (rootRef.current && !rootRef.current.contains(target)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="session-combo" ref={rootRef}>
+      <button
+        type="button"
+        className="session-combo-trigger"
+        onClick={() => {
+          if (disabled) return;
+          setOpen((prev) => !prev);
+          setQuery("");
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+      >
+        <span className="session-combo-trigger-text">
+          {selected ? selected.name : placeholder}
+        </span>
+      </button>
+      {open && !disabled && (
+        <div className="session-combo-menu" role="listbox">
+          <div className="session-combo-search">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search sessions..."
+              autoFocus
+            />
+          </div>
+          <div className="session-combo-options">
+            {sorted.length === 0 ? (
+              <div className="session-combo-empty">No matching sessions</div>
+            ) : (
+              sorted.map((opt) => {
+                const isSelected = opt.name === value;
+                return (
+                  <button
+                    key={opt.name}
+                    type="button"
+                    className={`session-combo-option${isSelected ? " selected" : ""}`}
+                    onClick={() => {
+                      onChange(opt.name);
+                      setOpen(false);
+                    }}
+                  >
+                    <div>
+                      <div className="session-combo-option-title">{opt.name}</div>
+                      <div className="session-combo-option-meta">
+                        {opt.username ? `@${opt.username}` : "Unknown"} • {opt.phone || "No phone"}
+                      </div>
+                    </div>
+                    <div className="session-combo-option-badges">
+                      <span className={`badge ${opt.proxy ? "on" : "off"}`}>{opt.proxy ? "Proxy" : "Direct"}</span>
+                      {opt.running > 0 ? <span className="badge running">Running {opt.running}</span> : null}
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type PresetSelectProps = {
+  value: string;
+  options: PresetItem[];
+  onChange: (next: string) => void;
+  placeholder?: string;
+  searchPlaceholder?: string;
+  allowEmpty?: boolean;
+  emptyLabel?: string;
+  disabled?: boolean;
+};
+
+function PresetSelect({
+  value,
+  options,
+  onChange,
+  placeholder = "Select preset",
+  searchPlaceholder = "Search presets...",
+  allowEmpty = true,
+  emptyLabel = "No preset (use defaults)",
+  disabled,
+}: PresetSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  const selected = useMemo(() => options.find((opt) => opt.name === value) || null, [options, value]);
+  const filtered = useMemo(() => options.filter((preset) => presetMatchesQuery(preset, query)), [options, query]);
+  const sorted = useMemo(() => {
+    const next = filtered.slice();
+    next.sort((a, b) => a.name.localeCompare(b.name));
+    return next;
+  }, [filtered]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (rootRef.current && !rootRef.current.contains(target)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const triggerText = selected ? selected.name : value ? value : placeholder;
+
+  return (
+    <div className="session-combo" ref={rootRef}>
+      <button
+        type="button"
+        className="session-combo-trigger"
+        onClick={() => {
+          if (disabled) return;
+          setOpen((prev) => !prev);
+          setQuery("");
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+      >
+        <span className="session-combo-trigger-text">{triggerText}</span>
+      </button>
+      {open && !disabled && (
+        <div className="session-combo-menu" role="listbox">
+          <div className="session-combo-search">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={searchPlaceholder}
+              autoFocus
+            />
+          </div>
+          <div className="session-combo-options">
+            {allowEmpty ? (
+              <button
+                type="button"
+                className={`session-combo-option${value === "" ? " selected" : ""}`}
+                onClick={() => {
+                  onChange("");
+                  setOpen(false);
+                }}
+              >
+                <div>
+                  <div className="session-combo-option-title">{emptyLabel}</div>
+                  <div className="session-combo-option-meta">Clears the preset selection</div>
+                </div>
+              </button>
+            ) : null}
+            {sorted.length === 0 ? (
+              <div className="session-combo-empty">No matching presets</div>
+            ) : (
+              sorted.map((opt) => {
+                const kind = normalizePresetKind(opt.kind);
+                const isSelected = opt.name === value;
+                return (
+                  <button
+                    key={`${kind}:${opt.name}`}
+                    type="button"
+                    className={`session-combo-option${isSelected ? " selected" : ""}`}
+                    onClick={() => {
+                      onChange(opt.name);
+                      setOpen(false);
+                    }}
+                  >
+                    <div>
+                      <div className="session-combo-option-title">{opt.name}</div>
+                      <div className="session-combo-option-meta">{presetPrimaryMeta(opt, kind)}</div>
+                    </div>
+                    <div className="session-combo-option-badges">
+                      {kind === "warmup" ? (
+                        <span className="badge on">Warmup</span>
+                      ) : (
+                        <span className="badge off">{opt.rate_mode}</span>
+                      )}
+                      {kind === "warmup" && opt.ai_profile_id ? <span className="badge running">AI</span> : null}
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type SessionBrowserProps = {
+  sessions: SessionView[];
+  selected?: string | null;
+  onSelect?: (name: string) => void;
+  maxHeight?: number;
+  emptyText?: string;
+};
+
+function SessionBrowser({ sessions, selected, onSelect, maxHeight, emptyText }: SessionBrowserProps) {
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<SessionFilter>("all");
+
+  const filtered = useMemo(() => {
+    const next = filterSessions(sessions, query, filter);
+    next.sort((a, b) => {
+      if (b.running !== a.running) return b.running - a.running;
+      const aLast = a.last_used || "";
+      const bLast = b.last_used || "";
+      if (bLast !== aLast) return bLast.localeCompare(aLast);
+      return a.name.localeCompare(b.name);
+    });
+    return next;
+  }, [sessions, query, filter]);
+
+  const counts = useMemo(() => {
+    const proxy = sessions.filter((s) => s.proxy).length;
+    const direct = sessions.length - proxy;
+    const running = sessions.filter((s) => s.running > 0).length;
+    return { proxy, direct, running };
+  }, [sessions]);
+
+  return (
+    <div className="session-browser">
+      <div className="session-browser-controls">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search sessions..."
+        />
+        <div className="chip-row" role="tablist" aria-label="Session filters">
+          <button type="button" className={`chip${filter === "all" ? " active" : ""}`} onClick={() => setFilter("all")}>
+            All
+          </button>
+          <button
+            type="button"
+            className={`chip${filter === "running" ? " active" : ""}`}
+            onClick={() => setFilter("running")}
+          >
+            Running ({counts.running})
+          </button>
+          <button
+            type="button"
+            className={`chip${filter === "proxy" ? " active" : ""}`}
+            onClick={() => setFilter("proxy")}
+          >
+            Proxy ({counts.proxy})
+          </button>
+          <button
+            type="button"
+            className={`chip${filter === "direct" ? " active" : ""}`}
+            onClick={() => setFilter("direct")}
+          >
+            Direct ({counts.direct})
+          </button>
+          <span className="chip-hint">
+            {filtered.length}/{sessions.length}
+          </span>
+        </div>
+      </div>
+      <div className="session-list session-list-scroll" style={maxHeight ? { maxHeight } : undefined}>
+        {filtered.length === 0 ? (
+          <p className="muted">{emptyText || "No sessions found."}</p>
+        ) : (
+          filtered.map((session) => (
+            <div
+              key={session.name}
+              className={`session-card interactive${selected === session.name ? " selected" : ""}`}
+              onClick={() => onSelect?.(session.name)}
+              role={onSelect ? "button" : undefined}
+              tabIndex={onSelect ? 0 : undefined}
+              onKeyDown={(e) => {
+                if (!onSelect) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect(session.name);
+                }
+              }}
+            >
+              <div>
+                <h4>{session.name}</h4>
+                <p className="meta">
+                  {session.username ? `@${session.username}` : "Unknown"} • {session.phone || "No phone"}
+                </p>
+              </div>
+              <div className="badge-stack">
+                <div className={`badge ${session.proxy ? "on" : "off"}`}>{session.proxy ? "Proxy" : "Direct"}</div>
+                {session.running > 0 ? <div className="badge running">Running {session.running}</div> : null}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+type MultiSessionPickerProps = {
+  sessions: SessionView[];
+  selected: string[];
+  onToggle: (name: string) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+};
+
+function MultiSessionPicker({ sessions, selected, onToggle, onSelectAll, onClear }: MultiSessionPickerProps) {
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<SessionFilter>("all");
+
+  const filtered = useMemo(() => filterSessions(sessions, query, filter), [sessions, query, filter]);
+  const counts = useMemo(() => {
+    const proxy = sessions.filter((s) => s.proxy).length;
+    const direct = sessions.length - proxy;
+    const running = sessions.filter((s) => s.running > 0).length;
+    return { proxy, direct, running };
+  }, [sessions]);
+
+  return (
+    <div className="session-picker">
+      <div className="picker-actions">
+        <button className="ghost" onClick={onSelectAll}>
+          Select all
+        </button>
+        <button className="ghost" onClick={onClear}>
+          Clear
+        </button>
+        <span className="hint">{selected.length} selected</span>
+      </div>
+      <div className="session-browser-controls">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search sessions..."
+        />
+        <div className="chip-row" role="tablist" aria-label="Session filters">
+          <button type="button" className={`chip${filter === "all" ? " active" : ""}`} onClick={() => setFilter("all")}>
+            All
+          </button>
+          <button
+            type="button"
+            className={`chip${filter === "running" ? " active" : ""}`}
+            onClick={() => setFilter("running")}
+          >
+            Running ({counts.running})
+          </button>
+          <button
+            type="button"
+            className={`chip${filter === "proxy" ? " active" : ""}`}
+            onClick={() => setFilter("proxy")}
+          >
+            Proxy ({counts.proxy})
+          </button>
+          <button
+            type="button"
+            className={`chip${filter === "direct" ? " active" : ""}`}
+            onClick={() => setFilter("direct")}
+          >
+            Direct ({counts.direct})
+          </button>
+          <span className="chip-hint">
+            {filtered.length}/{sessions.length}
+          </span>
+        </div>
+      </div>
+      <div className="picker-grid picker-grid-scroll">
+        {filtered.map((session) => (
+          <label key={session.name} className="check">
+            <input
+              type="checkbox"
+              checked={selected.includes(session.name)}
+              onChange={() => onToggle(session.name)}
+            />
+            <span className="check-label">
+              <span className="check-title">{session.name}</span>
+              <span className="check-meta">{session.proxy ? "Proxy" : "Direct"}{session.running > 0 ? ` • Running ${session.running}` : ""}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [licenseReady, setLicenseReady] = useState(false);
   const [licenseActive, setLicenseActive] = useState(false);
@@ -361,7 +873,10 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const [presets, setPresets] = useState<PresetItem[]>([]);
+  const [dmPresetQuery, setDmPresetQuery] = useState("");
+  const [warmupPresetQuery, setWarmupPresetQuery] = useState("");
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
+  const [workflowQuery, setWorkflowQuery] = useState("");
   const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraft>(defaultWorkflowDraft);
   const [presetForm, setPresetForm] = useState<PresetForm>(defaultPresetForm);
   const [presetEditing, setPresetEditing] = useState(false);
@@ -403,6 +918,16 @@ function App() {
     () => presets.filter((preset) => (preset.kind || "dm") === "warmup"),
     [presets]
   );
+  const filteredDmPresets = useMemo(() => {
+    const next = dmPresets.filter((preset) => presetMatchesQuery(preset, dmPresetQuery));
+    next.sort((a, b) => a.name.localeCompare(b.name));
+    return next;
+  }, [dmPresets, dmPresetQuery]);
+  const filteredWarmupPresets = useMemo(() => {
+    const next = warmupPresets.filter((preset) => presetMatchesQuery(preset, warmupPresetQuery));
+    next.sort((a, b) => a.name.localeCompare(b.name));
+    return next;
+  }, [warmupPresets, warmupPresetQuery]);
   const presetNames = useMemo(() => dmPresets.map((preset) => preset.name), [dmPresets]);
   const warmupPresetNames = useMemo(
     () => warmupPresets.map((preset) => preset.name),
@@ -411,6 +936,23 @@ function App() {
 
   const presetOptions = useMemo(() => dmPresets, [dmPresets]);
   const aiReadyProfiles = useMemo(() => aiProfiles.filter((profile) => profile.has_key), [aiProfiles]);
+
+  const filteredWorkflows = useMemo(() => {
+    const q = normalizeText(workflowQuery);
+    const next = workflows.filter((workflow) => {
+      if (!q) return true;
+      const name = normalizeText(workflow.name || "");
+      const id = normalizeText(workflow.id || "");
+      return name.includes(q) || id.includes(q);
+    });
+    next.sort((a, b) => {
+      const aName = a.name || "";
+      const bName = b.name || "";
+      if (aName !== bName) return aName.localeCompare(bName);
+      return (a.id || "").localeCompare(b.id || "");
+    });
+    return next;
+  }, [workflows, workflowQuery]);
 
   const nodeLookup = useMemo(
     () => new Map(workflowDraft.nodes.map((node) => [node.id, node])),
@@ -610,11 +1152,30 @@ function App() {
 
   const [renameSession, setRenameSession] = useState({ old_name: "", new_name: "" });
   const [deleteSession, setDeleteSession] = useState("");
+  const [managedSession, setManagedSession] = useState("");
   const [importDir, setImportDir] = useState("");
   const [mergeFiles, setMergeFiles] = useState("");
   const [mergeOutput, setMergeOutput] = useState("merged.csv");
 
   const sessionOptions = useMemo(() => sessions, [sessions]);
+  const sessionViews = useMemo<SessionView[]>(() => {
+    const runningCounts: Record<string, number> = {};
+    for (const job of jobs) {
+      if (job.status !== "running") continue;
+      const list: string[] = Array.isArray(job.sessions) ? job.sessions.filter(Boolean) : [];
+      const metaSession = typeof job.meta?.session === "string" ? (job.meta.session as string) : "";
+      if (list.length === 0 && metaSession) {
+        list.push(metaSession);
+      }
+      for (const sessionName of list) {
+        runningCounts[sessionName] = (runningCounts[sessionName] || 0) + 1;
+      }
+    }
+    return sessionOptions.map((session) => ({
+      ...session,
+      running: runningCounts[session.name] || 0,
+    }));
+  }, [sessionOptions, jobs]);
 
   const loadLicense = async () => {
     if (!isTauri()) {
@@ -1088,6 +1649,7 @@ function App() {
     setProxyForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setDeleteSession((prev) => prev || first);
     setRenameSession((prev) => (prev.old_name ? prev : { ...prev, old_name: first }));
+    setManagedSession((prev) => prev || first);
     if (multiSessions.length === 0) {
       setMultiSessions([first]);
     }
@@ -1142,7 +1704,7 @@ function App() {
   }, [workflowDraft.id, workflowDraft.nodes]);
 
   useEffect(() => {
-    const firstPreset = presets[0]?.name;
+    const firstPreset = dmPresets[0]?.name;
     if (!firstPreset) {
       return;
     }
@@ -1154,7 +1716,7 @@ function App() {
     setMultiInviteForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
     setMultiBulkAddForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
     setMultiForwardForm((prev) => (prev.preset_name ? prev : { ...prev, preset_name: firstPreset }));
-  }, [presets]);
+  }, [dmPresets]);
 
   useEffect(() => {
     if (warmupPresets.length === 0) {
@@ -2011,6 +2573,21 @@ function App() {
   const showLicense = activeTab === "license";
   const runningJobs = useMemo(() => jobs.filter((job) => job.status === "running"), [jobs]);
 
+  const focusSession = (name: string) => {
+    const next = name.trim();
+    if (!next) return;
+    setManagedSession(next);
+  };
+
+  const selectManagedSession = (name: string) => {
+    const next = name.trim();
+    if (!next) return;
+    setManagedSession(next);
+    setRenameSession((prev) => ({ ...prev, old_name: next }));
+    setDeleteSession(next);
+    setProxyForm((prev) => ({ ...prev, session: next }));
+  };
+
   const toggleMultiSession = (name: string) => {
     setMultiSessions((prev) =>
       prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name]
@@ -2400,24 +2977,13 @@ function App() {
               <h3>Sessions</h3>
               <span className="hint">{sessionOptions.length} total</span>
             </div>
-            <div className="session-list">
-              {sessionOptions.length === 0 && (
-                <p className="muted">No sessions found. Add sessions in the backend.</p>
-              )}
-              {sessionOptions.map((session) => (
-                <div key={session.name} className="session-card">
-                  <div>
-                    <h4>{session.name}</h4>
-                    <p className="meta">
-                      {session.username ? `@${session.username}` : "Unknown"} • {session.phone || "No phone"}
-                    </p>
-                  </div>
-                  <div className={`badge ${session.proxy ? "on" : "off"}`}>
-                    {session.proxy ? "Proxy" : "Direct"}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <SessionBrowser
+              sessions={sessionViews}
+              selected={managedSession}
+              onSelect={focusSession}
+              maxHeight={360}
+              emptyText="No sessions found. Add sessions in the backend."
+            />
           </div>
 
           <div className="overview-stack">
@@ -2531,24 +3097,13 @@ function App() {
               <h3>Sessions</h3>
               <span className="hint">{sessionOptions.length} total</span>
             </div>
-            <div className="session-list">
-              {sessionOptions.length === 0 && (
-                <p className="muted">No sessions found. Add sessions in the backend.</p>
-              )}
-              {sessionOptions.map((session) => (
-                <div key={session.name} className="session-card">
-                  <div>
-                    <h4>{session.name}</h4>
-                    <p className="meta">
-                      {session.username ? `@${session.username}` : "Unknown"} • {session.phone || "No phone"}
-                    </p>
-                  </div>
-                  <div className={`badge ${session.proxy ? "on" : "off"}`}>
-                    {session.proxy ? "Proxy" : "Direct"}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <SessionBrowser
+              sessions={sessionViews}
+              selected={managedSession}
+              onSelect={selectManagedSession}
+              maxHeight={520}
+              emptyText="No sessions found. Add sessions in the backend."
+            />
           </div>
           )}
 
@@ -2562,17 +3117,14 @@ function App() {
               <label>
                 Rename session
                 <div className="row">
-                  <select
+                  <SessionSelect
                     value={renameSession.old_name}
-                    onChange={(e) => setRenameSession((prev) => ({ ...prev, old_name: e.target.value }))}
-                  >
-                    <option value="">Select session</option>
-                    {sessionOptions.map((session) => (
-                      <option key={session.name} value={session.name}>
-                        {session.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={sessionViews}
+                    onChange={(next) => {
+                      setRenameSession((prev) => ({ ...prev, old_name: next }));
+                      setManagedSession(next);
+                    }}
+                  />
                   <input
                     type="text"
                     value={renameSession.new_name}
@@ -2588,14 +3140,14 @@ function App() {
               <label>
                 Delete session
                 <div className="row">
-                  <select value={deleteSession} onChange={(e) => setDeleteSession(e.target.value)}>
-                    <option value="">Select session</option>
-                    {sessionOptions.map((session) => (
-                      <option key={session.name} value={session.name}>
-                        {session.name}
-                      </option>
-                    ))}
-                  </select>
+                  <SessionSelect
+                    value={deleteSession}
+                    options={sessionViews}
+                    onChange={(next) => {
+                      setDeleteSession(next);
+                      setManagedSession(next);
+                    }}
+                  />
                   <button className="danger" onClick={handleDelete}>
                     Delete
                   </button>
@@ -2661,17 +3213,14 @@ function App() {
             <div className="form-grid">
               <label>
                 Session
-                <select
+                <SessionSelect
                   value={proxyForm.session}
-                  onChange={(e) => setProxyForm((prev) => ({ ...prev, session: e.target.value }))}
-                >
-                  <option value="">Select session</option>
-                  {sessionOptions.map((session) => (
-                    <option key={session.name} value={session.name}>
-                      {session.name}
-                    </option>
-                  ))}
-                </select>
+                  options={sessionViews}
+                  onChange={(next) => {
+                    setProxyForm((prev) => ({ ...prev, session: next }));
+                    setManagedSession(next);
+                  }}
+                />
               </label>
               <label>
                 Proxy type
@@ -3099,72 +3648,104 @@ function App() {
             </div>
           </div>
 
-          {presetPanel !== "preset-warmup" && (
-          <div className="panel" id="preset-dm">
-            <div className="panel-header">
-              <h3>Saved DM presets</h3>
-              <span className="hint">{dmPresets.length} total</span>
-            </div>
-            <div className="session-list">
-              {dmPresets.length === 0 && <p className="muted">No DM presets yet.</p>}
-              {dmPresets.map((preset) => (
-                <div key={preset.name} className="session-card">
-                  <div>
-                    <h4>{preset.name}</h4>
-                    <p className="meta">
-                      Interval {preset.interval_seconds}s • Rate mode {preset.rate_mode} • Users{" "}
-                      {preset.all_csv_users || !preset.max_users ? "all" : preset.max_users}
-                    </p>
-                  </div>
-                  <div className="row">
-                    <button className="ghost" onClick={() => handlePresetEdit(preset)}>
-                      Edit
-                    </button>
-                    <button className="danger" onClick={() => handlePresetDelete(preset.name)}>
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          )}
+	          {presetPanel !== "preset-warmup" && (
+		          <div className="panel" id="preset-dm">
+		            <div className="panel-header">
+		              <h3>Saved DM presets</h3>
+		              <span className="hint">
+		                {dmPresetQuery ? `${filteredDmPresets.length} shown • ${dmPresets.length} total` : `${dmPresets.length} total`}
+		              </span>
+		            </div>
+		            <div className="session-browser">
+		              <div className="session-browser-controls">
+		                <input
+		                  type="text"
+		                  value={dmPresetQuery}
+		                  onChange={(e) => setDmPresetQuery(e.target.value)}
+		                  placeholder="Search DM presets..."
+		                />
+		              </div>
+		              <div className="session-list">
+		                {dmPresets.length === 0 && <p className="muted">No DM presets yet.</p>}
+		                {dmPresets.length > 0 && filteredDmPresets.length === 0 && (
+		                  <p className="muted">No presets match that search.</p>
+		                )}
+		                {filteredDmPresets.map((preset) => (
+		                  <div key={preset.name} className="session-card">
+		                    <div>
+		                      <h4>{preset.name}</h4>
+		                      <p className="meta">
+		                        Interval {preset.interval_seconds}s • Rate mode {preset.rate_mode} • Users{" "}
+		                        {preset.all_csv_users || !preset.max_users ? "all" : preset.max_users}
+		                      </p>
+		                    </div>
+		                    <div className="row">
+		                      <button className="ghost" onClick={() => handlePresetEdit(preset)}>
+		                        Edit
+		                      </button>
+		                      <button className="danger" onClick={() => handlePresetDelete(preset.name)}>
+		                        Delete
+		                      </button>
+		                    </div>
+		                  </div>
+		                ))}
+		              </div>
+		            </div>
+		          </div>
+		          )}
 
-          {presetPanel === "preset-warmup" && (
-          <div className="panel" id="preset-warmup">
-            <div className="panel-header">
-              <h3>Saved Warmup presets</h3>
-              <span className="hint">{warmupPresets.length} total</span>
-            </div>
-            <div className="session-list">
-              {warmupPresets.length === 0 && <p className="muted">No warmup presets yet.</p>}
-              {warmupPresets.map((preset) => (
-                <div key={preset.name} className="session-card">
-                  <div>
-                    <h4>{preset.name}</h4>
-                    <p className="meta">
-                      Total {preset.total_messages ?? 0} • {preset.min_delay ?? 0}-{preset.max_delay ?? 0}s • Modes{" "}
-                      {(preset.warmup_modes && preset.warmup_modes.length
-                        ? preset.warmup_modes
-                        : preset.warmup_mode
-                        ? [preset.warmup_mode]
-                        : ["reply"]
-                      ).join(", ")}
-                    </p>
-                  </div>
-                  <div className="row">
-                    <button className="ghost" onClick={() => handlePresetEdit(preset)}>
-                      Edit
-                    </button>
-                    <button className="danger" onClick={() => handlePresetDelete(preset.name)}>
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          )}
+	          {presetPanel === "preset-warmup" && (
+		          <div className="panel" id="preset-warmup">
+		            <div className="panel-header">
+		              <h3>Saved Warmup presets</h3>
+		              <span className="hint">
+		                {warmupPresetQuery
+		                  ? `${filteredWarmupPresets.length} shown • ${warmupPresets.length} total`
+		                  : `${warmupPresets.length} total`}
+		              </span>
+		            </div>
+		            <div className="session-browser">
+		              <div className="session-browser-controls">
+		                <input
+		                  type="text"
+		                  value={warmupPresetQuery}
+		                  onChange={(e) => setWarmupPresetQuery(e.target.value)}
+		                  placeholder="Search warmup presets..."
+		                />
+		              </div>
+		              <div className="session-list">
+		                {warmupPresets.length === 0 && <p className="muted">No warmup presets yet.</p>}
+		                {warmupPresets.length > 0 && filteredWarmupPresets.length === 0 && (
+		                  <p className="muted">No presets match that search.</p>
+		                )}
+		                {filteredWarmupPresets.map((preset) => (
+		                  <div key={preset.name} className="session-card">
+		                    <div>
+		                      <h4>{preset.name}</h4>
+		                      <p className="meta">
+		                        Total {preset.total_messages ?? 0} • {preset.min_delay ?? 0}-{preset.max_delay ?? 0}s • Modes{" "}
+		                        {(preset.warmup_modes && preset.warmup_modes.length
+		                          ? preset.warmup_modes
+		                          : preset.warmup_mode
+		                          ? [preset.warmup_mode]
+		                          : ["reply"]
+		                        ).join(", ")}
+		                      </p>
+		                    </div>
+		                    <div className="row">
+		                      <button className="ghost" onClick={() => handlePresetEdit(preset)}>
+		                        Edit
+		                      </button>
+		                      <button className="danger" onClick={() => handlePresetDelete(preset.name)}>
+		                        Delete
+		                      </button>
+		                    </div>
+		                  </div>
+		                ))}
+		              </div>
+		            </div>
+		          </div>
+		          )}
         </div>
       </section>
       )}
@@ -3262,31 +3843,15 @@ function App() {
                           <input type="text" value={selectedNode.type} disabled />
                         </label>
                         {(() => {
-                          const config = selectedNode.config as Record<string, any>;
-                          const presetValue = typeof config.preset_name === "string" ? config.preset_name : "";
-                          const inputFileValue = typeof config.input_file === "string" ? config.input_file : "";
+	                          const config = selectedNode.config as Record<string, any>;
+	                          const presetValue = typeof config.preset_name === "string" ? config.preset_name : "";
+	                          const inputFileValue = typeof config.input_file === "string" ? config.input_file : "";
 
-                          const renderPresetSelect = (options: string[]) => (
-                            <label>
-                              Preset
-                              <select
-                                value={presetValue}
-                                onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { preset_name: e.target.value })}
-                              >
-                                <option value="">Select preset</option>
-                                {options.map((name) => (
-                                  <option key={name} value={name}>
-                                    {name}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          );
-                          const renderInputFile = () => (
-                            <label>
-                              CSV file
-                              <input
-                                type="text"
+	                          const renderInputFile = () => (
+	                            <label>
+	                              CSV file
+	                              <input
+	                                type="text"
                                 value={inputFileValue}
                                 onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { input_file: e.target.value })}
                               />
@@ -3304,17 +3869,11 @@ function App() {
                               <>
                                 <label>
                                   Session
-                                  <select
+                                  <SessionSelect
                                     value={sessionValue}
-                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { session: e.target.value })}
-                                  >
-                                    <option value="">Select session</option>
-                                    {sessionOptions.map((item) => (
-                                      <option key={item.name} value={item.name}>
-                                        {item.name}
-                                      </option>
-                                    ))}
-                                  </select>
+                                    options={sessionViews}
+                                    onChange={(next) => updateWorkflowNodeConfig(selectedNode.id, { session: next })}
+                                  />
                                 </label>
                                 <label>
                                   Loop count
@@ -3383,13 +3942,20 @@ function App() {
                                 : Number.isFinite(Number(config.spintax_variations))
                                 ? Number(config.spintax_variations)
                                 : 5;
-                            return (
-                              <>
-                                {renderPresetSelect(presetNames)}
-                                {renderInputFile()}
-                                <label>
-                                  Media path
-                                  <input
+	                            return (
+	                              <>
+	                                <label>
+	                                  Preset
+	                                  <PresetSelect
+	                                    value={presetValue}
+	                                    options={dmPresets}
+	                                    onChange={(next) => updateWorkflowNodeConfig(selectedNode.id, { preset_name: next })}
+	                                  />
+	                                </label>
+	                                {renderInputFile()}
+	                                <label>
+	                                  Media path
+	                                  <input
                                     type="text"
                                     value={config.media_path ?? ""}
                                     onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
@@ -3447,13 +4013,20 @@ function App() {
                                 : Number.isFinite(Number(config.spintax_variations))
                                 ? Number(config.spintax_variations)
                                 : 5;
-                            return (
-                              <>
-                                {renderPresetSelect(presetNames)}
-                                {renderInputFile()}
-                                <label>
-                                  Invite link
-                                  <input
+	                            return (
+	                              <>
+	                                <label>
+	                                  Preset
+	                                  <PresetSelect
+	                                    value={presetValue}
+	                                    options={dmPresets}
+	                                    onChange={(next) => updateWorkflowNodeConfig(selectedNode.id, { preset_name: next })}
+	                                  />
+	                                </label>
+	                                {renderInputFile()}
+	                                <label>
+	                                  Invite link
+	                                  <input
                                     type="text"
                                     value={config.invite_url ?? ""}
                                     onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { invite_url: e.target.value })}
@@ -3512,14 +4085,21 @@ function App() {
                               </>
                             );
                           }
-                          if (selectedNode.type === "bulk_add") {
-                            return (
-                              <>
-                                {renderPresetSelect(presetNames)}
-                                {renderInputFile()}
-                                <label>
-                                  Target group/channel
-                                  <input
+	                          if (selectedNode.type === "bulk_add") {
+	                            return (
+	                              <>
+	                                <label>
+	                                  Preset
+	                                  <PresetSelect
+	                                    value={presetValue}
+	                                    options={dmPresets}
+	                                    onChange={(next) => updateWorkflowNodeConfig(selectedNode.id, { preset_name: next })}
+	                                  />
+	                                </label>
+	                                {renderInputFile()}
+	                                <label>
+	                                  Target group/channel
+	                                  <input
                                     type="text"
                                     value={config.target_ref ?? ""}
                                     onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { target_ref: e.target.value })}
@@ -3528,14 +4108,21 @@ function App() {
                               </>
                             );
                           }
-                          if (selectedNode.type === "forward") {
-                            return (
-                              <>
-                                {renderPresetSelect(presetNames)}
-                                {renderInputFile()}
-                                <label>
-                                  Message link
-                                  <input
+	                          if (selectedNode.type === "forward") {
+	                            return (
+	                              <>
+	                                <label>
+	                                  Preset
+	                                  <PresetSelect
+	                                    value={presetValue}
+	                                    options={dmPresets}
+	                                    onChange={(next) => updateWorkflowNodeConfig(selectedNode.id, { preset_name: next })}
+	                                  />
+	                                </label>
+	                                {renderInputFile()}
+	                                <label>
+	                                  Message link
+	                                  <input
                                     type="text"
                                     value={config.message_link ?? ""}
                                     onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { message_link: e.target.value })}
@@ -3576,14 +4163,23 @@ function App() {
                               </>
                             );
                           }
-                          if (selectedNode.type === "warmup") {
-                            return (
-                              <>
-                                {renderPresetSelect(warmupPresetNames)}
-                                <label>
-                                  Targets
-                                  <input
-                                    type="text"
+	                          if (selectedNode.type === "warmup") {
+	                            return (
+	                              <>
+	                                <label>
+	                                  Preset
+	                                  <PresetSelect
+	                                    value={presetValue}
+	                                    options={warmupPresets}
+	                                    placeholder="Select warmup preset"
+	                                    searchPlaceholder="Search warmup presets..."
+	                                    onChange={(next) => updateWorkflowNodeConfig(selectedNode.id, { preset_name: next })}
+	                                  />
+	                                </label>
+	                                <label>
+	                                  Targets
+	                                  <input
+	                                    type="text"
                                     value={config.targets ?? ""}
                                     onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { targets: e.target.value })}
                                   />
@@ -3597,33 +4193,50 @@ function App() {
                     </div>
                   )}
 
-                  <div className="workflow-overlay-panel">
-                    <div className="panel-header">
-                      <h3>Saved loops</h3>
-                      <span className="hint">{workflows.length} total</span>
-                    </div>
-                    <div className="session-list">
-                      {workflows.length === 0 && <p className="muted">No loops saved yet.</p>}
-                      {workflows.map((workflow) => (
-                        <div key={workflow.id} className="session-card">
-                          <div>
-                            <h4>{workflow.name}</h4>
-                            <p className="meta">
-                              {workflow.id} • {workflow.nodes?.length ?? 0} nodes
-                            </p>
-                          </div>
-                          <div className="row">
-                            <button className="ghost" onClick={() => handleWorkflowLoad(workflow)}>
-                              Load
-                            </button>
-                            <button className="danger" onClick={() => handleWorkflowDelete(workflow.id)}>
-                              Delete
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+	                  <div className="workflow-overlay-panel">
+	                    <div className="panel-header">
+	                      <h3>Saved loops</h3>
+	                      <span className="hint">
+	                        {workflowQuery
+	                          ? `${filteredWorkflows.length} shown • ${workflows.length} total`
+	                          : `${workflows.length} total`}
+	                      </span>
+	                    </div>
+	                    <div className="session-browser">
+	                      <div className="session-browser-controls">
+	                        <input
+	                          type="text"
+	                          value={workflowQuery}
+	                          onChange={(e) => setWorkflowQuery(e.target.value)}
+	                          placeholder="Search loops..."
+	                        />
+	                      </div>
+	                      <div className="session-list session-list-scroll" style={{ maxHeight: 320 }}>
+	                        {workflows.length === 0 && <p className="muted">No loops saved yet.</p>}
+	                        {workflows.length > 0 && filteredWorkflows.length === 0 && (
+	                          <p className="muted">No loops match that search.</p>
+	                        )}
+	                        {filteredWorkflows.map((workflow) => (
+	                          <div key={workflow.id} className="session-card">
+	                            <div>
+	                              <h4>{workflow.name}</h4>
+	                              <p className="meta">
+	                                {workflow.id} • {workflow.nodes?.length ?? 0} nodes
+	                              </p>
+	                            </div>
+	                            <div className="row">
+	                              <button className="ghost" onClick={() => handleWorkflowLoad(workflow)}>
+	                                Load
+	                              </button>
+	                              <button className="danger" onClick={() => handleWorkflowDelete(workflow.id)}>
+	                                Delete
+	                              </button>
+	                            </div>
+	                          </div>
+	                        ))}
+	                      </div>
+	                    </div>
+	                  </div>
                 </div>
 
                 <div
@@ -3800,14 +4413,7 @@ function App() {
             <div className="form-grid">
               <label>
                 Active session
-                <select value={singleSession} onChange={(e) => setSingleSession(e.target.value)}>
-                  <option value="">Select session</option>
-                  {sessionOptions.map((session) => (
-                    <option key={session.name} value={session.name}>
-                      {session.name}
-                    </option>
-                  ))}
-                </select>
+                <SessionSelect value={singleSession} options={sessionViews} onChange={setSingleSession} />
               </label>
             </div>
           </div>
@@ -3817,21 +4423,20 @@ function App() {
               <h3>Direct Message</h3>
               <span className="hint">CSV → DM</span>
             </div>
-            <div className="form-grid">
-              <label>
-                Preset
-                <select value={dmForm.preset_name} onChange={(e) => setDmForm({ ...dmForm, preset_name: e.target.value })}>
-                  <option value="">Select preset</option>
-                  {presetOptions.map((preset) => (
-                    <option key={preset.name} value={preset.name}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                CSV file
-                <input
+	            <div className="form-grid">
+	              <label>
+	                Preset
+	                <PresetSelect
+	                  value={dmForm.preset_name}
+	                  options={presetOptions}
+	                  placeholder="Select preset"
+	                  searchPlaceholder="Search DM presets..."
+	                  onChange={(next) => setDmForm({ ...dmForm, preset_name: next })}
+	                />
+	              </label>
+	              <label>
+	                CSV file
+	                <input
                   type="text"
                   value={dmForm.input_file}
                   onChange={(e) => setDmForm({ ...dmForm, input_file: e.target.value })}
@@ -3925,21 +4530,20 @@ function App() {
               <h3>Invite Link DM</h3>
               <span className="hint">DM invite to group/channel</span>
             </div>
-            <div className="form-grid">
-              <label>
-                Preset
-                <select value={inviteForm.preset_name} onChange={(e) => setInviteForm({ ...inviteForm, preset_name: e.target.value })}>
-                  <option value="">Select preset</option>
-                  {presetOptions.map((preset) => (
-                    <option key={preset.name} value={preset.name}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                CSV file
-                <input
+	            <div className="form-grid">
+	              <label>
+	                Preset
+	                <PresetSelect
+	                  value={inviteForm.preset_name}
+	                  options={presetOptions}
+	                  placeholder="Select preset"
+	                  searchPlaceholder="Search DM presets..."
+	                  onChange={(next) => setInviteForm({ ...inviteForm, preset_name: next })}
+	                />
+	              </label>
+	              <label>
+	                CSV file
+	                <input
                   type="text"
                   value={inviteForm.input_file}
                   onChange={(e) => setInviteForm({ ...inviteForm, input_file: e.target.value })}
@@ -4043,21 +4647,20 @@ function App() {
               <h3>Bulk Add</h3>
               <span className="hint">Invite users to group</span>
             </div>
-            <div className="form-grid">
-              <label>
-                Preset
-                <select value={bulkAddForm.preset_name} onChange={(e) => setBulkAddForm({ ...bulkAddForm, preset_name: e.target.value })}>
-                  <option value="">Select preset</option>
-                  {presetOptions.map((preset) => (
-                    <option key={preset.name} value={preset.name}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                CSV file
-                <input
+	            <div className="form-grid">
+	              <label>
+	                Preset
+	                <PresetSelect
+	                  value={bulkAddForm.preset_name}
+	                  options={presetOptions}
+	                  placeholder="Select preset"
+	                  searchPlaceholder="Search DM presets..."
+	                  onChange={(next) => setBulkAddForm({ ...bulkAddForm, preset_name: next })}
+	                />
+	              </label>
+	              <label>
+	                CSV file
+	                <input
                   type="text"
                   value={bulkAddForm.input_file}
                   onChange={(e) => setBulkAddForm({ ...bulkAddForm, input_file: e.target.value })}
@@ -4098,21 +4701,20 @@ function App() {
               <h3>Forward Message</h3>
               <span className="hint">Forward from source to users</span>
             </div>
-            <div className="form-grid">
-              <label>
-                Preset
-                <select value={forwardForm.preset_name} onChange={(e) => setForwardForm({ ...forwardForm, preset_name: e.target.value })}>
-                  <option value="">Select preset</option>
-                  {presetOptions.map((preset) => (
-                    <option key={preset.name} value={preset.name}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                CSV file
-                <input
+	            <div className="form-grid">
+	              <label>
+	                Preset
+	                <PresetSelect
+	                  value={forwardForm.preset_name}
+	                  options={presetOptions}
+	                  placeholder="Select preset"
+	                  searchPlaceholder="Search DM presets..."
+	                  onChange={(next) => setForwardForm({ ...forwardForm, preset_name: next })}
+	                />
+	              </label>
+	              <label>
+	                CSV file
+	                <input
                   type="text"
                   value={forwardForm.input_file}
                   onChange={(e) => setForwardForm({ ...forwardForm, input_file: e.target.value })}
@@ -4268,20 +4870,16 @@ function App() {
                   placeholder="@group1, @group2"
                 />
               </label>
-              <label>
-                Warmup preset
-                <select
-                  value={warmupForm.preset_name}
-                  onChange={(e) => setWarmupForm({ ...warmupForm, preset_name: e.target.value })}
-                >
-                  <option value="">Select warmup preset</option>
-                  {warmupPresets.map((preset) => (
-                    <option key={preset.name} value={preset.name}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+	              <label>
+	                Warmup preset
+	                <PresetSelect
+	                  value={warmupForm.preset_name}
+	                  options={warmupPresets}
+	                  placeholder="Select warmup preset"
+	                  searchPlaceholder="Search warmup presets..."
+	                  onChange={(next) => setWarmupForm({ ...warmupForm, preset_name: next })}
+	                />
+	              </label>
               <button
                 className="primary"
                 onClick={() => {
@@ -4329,28 +4927,13 @@ function App() {
               <h3>Session Selector</h3>
               <span className="hint">Pick accounts for multi-run</span>
             </div>
-            <div className="session-picker">
-              <div className="picker-actions">
-                <button className="ghost" onClick={selectAllSessions}>
-                  Select all
-                </button>
-                <button className="ghost" onClick={clearSessions}>
-                  Clear
-                </button>
-              </div>
-              <div className="picker-grid">
-                {sessionOptions.map((session) => (
-                  <label key={session.name} className="check">
-                    <input
-                      type="checkbox"
-                      checked={multiSessions.includes(session.name)}
-                      onChange={() => toggleMultiSession(session.name)}
-                    />
-                    {session.name}
-                  </label>
-                ))}
-              </div>
-            </div>
+            <MultiSessionPicker
+              sessions={sessionViews}
+              selected={multiSessions}
+              onToggle={toggleMultiSession}
+              onSelectAll={selectAllSessions}
+              onClear={clearSessions}
+            />
           </div>
 
           {multiPanel === "multi-dm" && (
@@ -4368,17 +4951,16 @@ function App() {
                   onChange={(e) => setMultiForm({ ...multiForm, input_file: e.target.value })}
                 />
               </label>
-              <label>
-                Preset
-                <select value={multiForm.preset_name} onChange={(e) => setMultiForm({ ...multiForm, preset_name: e.target.value })}>
-                  <option value="">Select preset</option>
-                  {presetOptions.map((preset) => (
-                    <option key={preset.name} value={preset.name}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+	              <label>
+	                Preset
+	                <PresetSelect
+	                  value={multiForm.preset_name}
+	                  options={presetOptions}
+	                  placeholder="Select preset"
+	                  searchPlaceholder="Search DM presets..."
+	                  onChange={(next) => setMultiForm({ ...multiForm, preset_name: next })}
+	                />
+	              </label>
               <label>
                 Message
                 <textarea
@@ -4467,7 +5049,7 @@ function App() {
               <h3>Multi Invite DM</h3>
               <span className="hint">Invite link + message</span>
             </div>
-            <div className="form-grid">
+	            <div className="form-grid">
               <label>
                 CSV file
                 <input
@@ -4476,17 +5058,16 @@ function App() {
                   onChange={(e) => setMultiInviteForm({ ...multiInviteForm, input_file: e.target.value })}
                 />
               </label>
-              <label>
-                Preset
-                <select value={multiInviteForm.preset_name} onChange={(e) => setMultiInviteForm({ ...multiInviteForm, preset_name: e.target.value })}>
-                  <option value="">Select preset</option>
-                  {presetOptions.map((preset) => (
-                    <option key={preset.name} value={preset.name}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+	              <label>
+	                Preset
+	                <PresetSelect
+	                  value={multiInviteForm.preset_name}
+	                  options={presetOptions}
+	                  placeholder="Select preset"
+	                  searchPlaceholder="Search DM presets..."
+	                  onChange={(next) => setMultiInviteForm({ ...multiInviteForm, preset_name: next })}
+	                />
+	              </label>
               <label>
                 Invite URL
                 <input
@@ -4584,7 +5165,7 @@ function App() {
               <h3>Multi Bulk Add</h3>
               <span className="hint">Add users with multiple accounts</span>
             </div>
-            <div className="form-grid">
+	            <div className="form-grid">
               <label>
                 CSV file
                 <input
@@ -4593,17 +5174,16 @@ function App() {
                   onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, input_file: e.target.value })}
                 />
               </label>
-              <label>
-                Preset
-                <select value={multiBulkAddForm.preset_name} onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, preset_name: e.target.value })}>
-                  <option value="">Select preset</option>
-                  {presetOptions.map((preset) => (
-                    <option key={preset.name} value={preset.name}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+	              <label>
+	                Preset
+	                <PresetSelect
+	                  value={multiBulkAddForm.preset_name}
+	                  options={presetOptions}
+	                  placeholder="Select preset"
+	                  searchPlaceholder="Search DM presets..."
+	                  onChange={(next) => setMultiBulkAddForm({ ...multiBulkAddForm, preset_name: next })}
+	                />
+	              </label>
               <label>
                 Target group (@group or id)
                 <input
@@ -4640,7 +5220,7 @@ function App() {
               <h3>Multi Forward</h3>
               <span className="hint">Forward from source with many accounts</span>
             </div>
-            <div className="form-grid">
+	            <div className="form-grid">
               <label>
                 CSV file
                 <input
@@ -4649,17 +5229,16 @@ function App() {
                   onChange={(e) => setMultiForwardForm({ ...multiForwardForm, input_file: e.target.value })}
                 />
               </label>
-              <label>
-                Preset
-                <select value={multiForwardForm.preset_name} onChange={(e) => setMultiForwardForm({ ...multiForwardForm, preset_name: e.target.value })}>
-                  <option value="">Select preset</option>
-                  {presetOptions.map((preset) => (
-                    <option key={preset.name} value={preset.name}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+	              <label>
+	                Preset
+	                <PresetSelect
+	                  value={multiForwardForm.preset_name}
+	                  options={presetOptions}
+	                  placeholder="Select preset"
+	                  searchPlaceholder="Search DM presets..."
+	                  onChange={(next) => setMultiForwardForm({ ...multiForwardForm, preset_name: next })}
+	                />
+	              </label>
               <label>
                 Source peer (@channel or id)
                 <input
@@ -4824,20 +5403,16 @@ function App() {
                   placeholder="@group1, @group2"
                 />
               </label>
-              <label>
-                Warmup preset
-                <select
-                  value={multiWarmupForm.preset_name}
-                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, preset_name: e.target.value })}
-                >
-                  <option value="">Select warmup preset</option>
-                  {warmupPresets.map((preset) => (
-                    <option key={preset.name} value={preset.name}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+	              <label>
+	                Warmup preset
+	                <PresetSelect
+	                  value={multiWarmupForm.preset_name}
+	                  options={warmupPresets}
+	                  placeholder="Select warmup preset"
+	                  searchPlaceholder="Search warmup presets..."
+	                  onChange={(next) => setMultiWarmupForm({ ...multiWarmupForm, preset_name: next })}
+	                />
+	              </label>
               <button
                 className="primary"
                 onClick={() => {
