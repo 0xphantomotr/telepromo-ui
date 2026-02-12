@@ -2131,31 +2131,40 @@ function App() {
     setCanvasOffset({ x: nextOffsetX, y: nextOffsetY });
   };
 
-  const validateWorkflow = () => {
-    const errors: string[] = [];
-    const sessionNodes = workflowDraft.nodes.filter((node) => node.type === "session");
-    if (sessionNodes.length === 0) {
-      errors.push("Add a Session node to start the workflow.");
-    }
-    if (sessionNodes.length > 1) {
-      errors.push("Only one Session node is allowed in a humanistic loop.");
-    }
-    sessionNodes.forEach((node) => {
-      const config = node.config as Record<string, any>;
-      const session = typeof config.session === "string" ? config.session.trim() : "";
-      if (!session) {
-        errors.push(`Session node ${node.id} needs a session selected.`);
-      }
-      const loopCount = Number(config.loop_count ?? 1);
-      if (!Number.isFinite(loopCount) || loopCount < 1) {
-        errors.push(`Session node ${node.id} needs a valid loop count.`);
-      }
-    });
+	  const validateWorkflow = () => {
+	    const errors: string[] = [];
+	    const sessionNodes = workflowDraft.nodes.filter((node) => node.type === "session");
+	    if (sessionNodes.length === 0) {
+	      errors.push("Add a Session node to start the workflow.");
+	    }
+	    if (sessionNodes.length > 1) {
+	      errors.push("Only one Session node is allowed in a humanistic loop.");
+	    }
+	    sessionNodes.forEach((node) => {
+	      const config = node.config as Record<string, any>;
+	      const session = typeof config.session === "string" ? config.session.trim() : "";
+	      if (!session) {
+	        errors.push(`Session node ${node.id} needs a session selected.`);
+	      }
+	      const loopCount = Number(config.loop_count ?? 1);
+	      if (!Number.isFinite(loopCount) || loopCount < 1) {
+	        errors.push(`Session node ${node.id} needs a valid loop count.`);
+	      }
+	    });
+	    if (sessionNodes.length === 1) {
+	      const sessionId = sessionNodes[0].id;
+	      const outgoing = workflowDraft.edges.filter((edge) => edge.source === sessionId);
+	      if (outgoing.length === 0) {
+	        errors.push("Session node must link to the first action.");
+	      } else if (outgoing.length > 1) {
+	        errors.push("Session node cannot have multiple outgoing links.");
+	      }
+	    }
 
-    const waitNodes = workflowDraft.nodes.filter((node) => node.type === "wait");
-    waitNodes.forEach((node) => {
-      const config = node.config as Record<string, any>;
-      if (config.min_seconds === "" || config.max_seconds === "") {
+	    const waitNodes = workflowDraft.nodes.filter((node) => node.type === "wait");
+	    waitNodes.forEach((node) => {
+	      const config = node.config as Record<string, any>;
+	      if (config.min_seconds === "" || config.max_seconds === "") {
         errors.push(`Wait node ${node.id} needs min/max seconds.`);
         return;
       }
@@ -2244,24 +2253,37 @@ function App() {
     return errors;
   };
 
-  const handleWorkflowStart = async () => {
-    setError(null);
-    const errors = validateWorkflow();
-    if (errors.length) {
-      setError(errors.join("\n"));
-      return;
-    }
-    const id = workflowDraft.id.trim();
-    if (!id) {
-      setError("Save the workflow before starting.");
-      return;
-    }
-    try {
-      await api.startWorkflow(id);
-      updateNotice(`Workflow started: ${workflowDraft.name || id}`);
-      setWorkflowDraft((draft) => ({
-        ...draft,
-        meta: { ...draft.meta, running: true },
+	  const handleWorkflowStart = async () => {
+	    setError(null);
+	    const errors = validateWorkflow();
+	    if (errors.length) {
+	      setError(errors.join("\n"));
+	      return;
+	    }
+	    const id = workflowDraft.id.trim();
+	    if (!id) {
+	      setError("Save the workflow before starting.");
+	      return;
+	    }
+	    const name = workflowDraft.name.trim();
+	    if (!name) {
+	      setError("Workflow name is required.");
+	      return;
+	    }
+	    try {
+	      // The backend starts the persisted workflow by id; save first so it matches the current canvas.
+	      await api.saveWorkflow({
+	        id,
+	        name,
+	        nodes: workflowDraft.nodes,
+	        edges: workflowDraft.edges,
+	        meta: workflowDraft.meta,
+	      });
+	      await api.startWorkflow(id);
+	      updateNotice(`Workflow started: ${workflowDraft.name || id}`);
+	      setWorkflowDraft((draft) => ({
+	        ...draft,
+	        meta: { ...draft.meta, running: true },
       }));
       refreshWorkflows();
     } catch (err: any) {
