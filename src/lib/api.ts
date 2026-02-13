@@ -65,8 +65,32 @@ async function request<T>(path: string, options?: RequestInit): Promise<ApiRespo
     ...options,
   });
   if (!res.ok) {
+    let message = `Request failed: ${res.status}`;
     const text = await res.text();
-    throw new Error(text || `Request failed: ${res.status}`);
+    if (text) {
+      try {
+        const parsed = JSON.parse(text) as { detail?: unknown };
+        if (typeof parsed?.detail === "string") {
+          message = parsed.detail;
+        } else if (Array.isArray(parsed?.detail)) {
+          message = parsed.detail
+            .map((item) => {
+              if (!item || typeof item !== "object") {
+                return "";
+              }
+              const obj = item as { msg?: unknown };
+              return typeof obj.msg === "string" ? obj.msg : "";
+            })
+            .filter(Boolean)
+            .join("; ");
+        } else {
+          message = text;
+        }
+      } catch {
+        message = text;
+      }
+    }
+    throw new Error(message || `Request failed: ${res.status}`);
   }
   return (await res.json()) as ApiResponse<T>;
 }
@@ -106,7 +130,11 @@ export const api = {
       enabled?: boolean;
     }
   ) =>
-    request<{ ok: boolean; proxy?: Record<string, unknown> | null }>(
+    request<{
+      ok: boolean;
+      proxy?: Record<string, unknown> | null;
+      check?: { ok: boolean; message?: string };
+    }>(
       `/sessions/${encodeURIComponent(name)}/proxy`,
       {
         method: "POST",
@@ -130,6 +158,54 @@ export const api = {
     ),
   importSessions: (payload: { source_dir: string }) =>
     request<{ imported: number }>("/sessions/import", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  createSessionStart: (payload: { name: string; phone: string }) =>
+    request<{ ok: boolean; login_id: string; expires_in: number }>("/sessions/create/start", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  createSessionFinish: (payload: { login_id: string; code?: string; password?: string }) =>
+    request<{
+      ok: boolean;
+      need_password?: boolean;
+      session?: { name: string; username?: string | null; phone?: string | null };
+    }>("/sessions/create/finish", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  createSessionCancel: (payload: { login_id: string }) =>
+    request<{ ok: boolean }>("/sessions/create/cancel", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  telegramApiSetup: () =>
+    request<{
+      configured: boolean;
+      api_id?: string | null;
+      api_hash_set: boolean;
+    }>("/settings/telegram-api"),
+  saveTelegramApiSetup: (payload: { api_id: string; api_hash: string }) =>
+    request<{
+      ok: boolean;
+      configured: boolean;
+      api_id?: string | null;
+      api_hash_set: boolean;
+    }>("/settings/telegram-api", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  resetLocalData: (payload: { include_api_setup?: boolean }) =>
+    request<{
+      ok: boolean;
+      stopped_jobs: number;
+      cleared_pending_logins: number;
+      removed_sessions: number;
+      removed_logs: number;
+      removed_data_files: number;
+      removed_env_keys: number;
+    }>("/settings/reset-local", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

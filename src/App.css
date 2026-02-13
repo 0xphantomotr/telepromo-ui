@@ -708,6 +708,11 @@ textarea {
   border-color: rgba(255, 107, 107, 0.35);
 }
 
+.alert-warning {
+  color: #f2c66d;
+  border-color: rgba(242, 198, 109, 0.42);
+}
+
 .alert-progress {
   position: absolute;
   left: 0;

@@ -75,4 +75,10 @@ export const licensing = {
     }
     return (await invoke("licensing_clear_token")) as boolean;
   },
+  async restartLocalBackend(): Promise<boolean> {
+    if (!isTauri()) {
+      return false;
+    }
+    return (await invoke("backend_restart")) as boolean;
+  },
 };

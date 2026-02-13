@@ -158,6 +158,16 @@ fn local_backend_autostart_enabled() -> bool {
         != "0"
 }
 
+fn backend_home_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .resolve("backend-home", BaseDirectory::AppData)
+        .map_err(|err| err.to_string())
+}
+
+fn backend_pid_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(backend_home_dir(app)?.join("backend.pid"))
+}
+
 fn resolve_backend_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
     let env_bin = std::env::var("TGCAMPAIGNER_BACKEND_BIN")
         .ok()
@@ -207,10 +217,7 @@ fn start_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
         let _ = fs::set_permissions(&bin, fs::Permissions::from_mode(0o755));
     }
 
-    let backend_home = app
-        .path()
-        .resolve("backend-home", BaseDirectory::AppData)
-        .map_err(|err| err.to_string())?;
+    let backend_home = backend_home_dir(app)?;
     let backend_logs = backend_home.join("logs");
     fs::create_dir_all(&backend_logs).map_err(|err| err.to_string())?;
     #[cfg(unix)]
@@ -252,13 +259,20 @@ fn start_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
 
-    let _child = cmd.spawn().map_err(|err| {
+    let child = cmd.spawn().map_err(|err| {
         format!(
             "Failed to start local backend sidecar '{}': {}",
             bin.display(),
             err
         )
     })?;
+    let pid_path = backend_pid_path(app)?;
+    fs::write(&pid_path, child.id().to_string()).map_err(|err| err.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&pid_path, fs::Permissions::from_mode(0o600));
+    }
 
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
@@ -269,6 +283,58 @@ fn start_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
     }
 
     Err("Local backend sidecar started but did not become healthy on 127.0.0.1:8000".to_string())
+}
+
+#[cfg(unix)]
+fn stop_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
+    let pid_path = backend_pid_path(app)?;
+    let pid_raw = fs::read_to_string(&pid_path).map_err(|err| err.to_string())?;
+    let pid = pid_raw
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| "Invalid backend pid file".to_string())?;
+    let status = Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .status()
+        .map_err(|err| err.to_string())?;
+    if !status.success() {
+        return Err("Failed to stop local backend sidecar (SIGTERM).".to_string());
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        if !local_backend_up() {
+            let _ = fs::remove_file(&pid_path);
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    let _ = Command::new("kill")
+        .arg("-KILL")
+        .arg(pid.to_string())
+        .status();
+    let _ = fs::remove_file(&pid_path);
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn stop_local_backend(_app: &tauri::AppHandle) -> Result<(), String> {
+    Err("Automatic backend restart is only implemented for unix builds.".to_string())
+}
+
+#[tauri::command]
+fn backend_restart(app: tauri::AppHandle) -> Result<bool, String> {
+    if !local_backend_autostart_enabled() {
+        return Err("Backend autostart is disabled in this build.".to_string());
+    }
+    let pid_path = backend_pid_path(&app)?;
+    if pid_path.exists() {
+        stop_local_backend(&app)?;
+    }
+    start_local_backend(&app)?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -317,6 +383,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            backend_restart,
             licensing_device_public_key,
             licensing_sign,
             licensing_get_token,

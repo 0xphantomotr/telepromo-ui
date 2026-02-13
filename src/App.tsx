@@ -188,6 +188,17 @@ type SessionProxyForm = {
   secret: string;
 };
 
+type TelegramApiSetupForm = {
+  api_id: string;
+  api_hash: string;
+};
+
+type TelegramApiSetupStatus = {
+  configured: boolean;
+  api_id?: string | null;
+  api_hash_set: boolean;
+};
+
 
 type WorkflowNode = {
   id: string;
@@ -300,6 +311,22 @@ const defaultProxyForm: SessionProxyForm = {
   username: "",
   password: "",
   secret: "",
+};
+
+const defaultTelegramApiSetupForm: TelegramApiSetupForm = {
+  api_id: "",
+  api_hash: "",
+};
+
+const TELEGRAM_API_MISSING_MESSAGE =
+  "Telegram API credentials are missing. Open Sessions -> API Setup and save API_ID + API_HASH.";
+
+const isMissingTelegramApiError = (message: string) => {
+  const normalized = (message || "").toLowerCase();
+  return (
+    normalized.includes("missing api_id/api_hash") ||
+    normalized.includes("telegram api credentials are not configured")
+  );
 };
 
 
@@ -850,9 +877,12 @@ function App() {
   const [licenseExp, setLicenseExp] = useState<number | null>(null);
   const [licenseKeyValue, setLicenseKeyValue] = useState<string | null>(null);
   const [licenseEmail, setLicenseEmail] = useState<string | null>(null);
+  const [resettingData, setResettingData] = useState(false);
+  const [resettingFactory, setResettingFactory] = useState(false);
 
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [proxyForm, setProxyForm] = useState<SessionProxyForm>(defaultProxyForm);
+  const [savingProxy, setSavingProxy] = useState(false);
   const [aiProfiles, setAiProfiles] = useState<AiProfile[]>([]);
   const [aiDefaultId, setAiDefaultId] = useState("");
   const [aiProfileForm, setAiProfileForm] = useState<AiProfileForm>({
@@ -870,6 +900,7 @@ function App() {
   const [lastLogPath, setLastLogPath] = useState<string | null>(null);
   const [lastAuditPath, setLastAuditPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const [presets, setPresets] = useState<PresetItem[]>([]);
@@ -1156,6 +1187,23 @@ function App() {
   const [importDir, setImportDir] = useState("");
   const [mergeFiles, setMergeFiles] = useState("");
   const [mergeOutput, setMergeOutput] = useState("merged.csv");
+  const [createSessionForm, setCreateSessionForm] = useState({
+    name: "",
+    phone: "",
+    login_id: "",
+    code: "",
+    password: "",
+    need_password: false,
+  });
+  const [telegramApiSetupForm, setTelegramApiSetupForm] = useState<TelegramApiSetupForm>(
+    defaultTelegramApiSetupForm
+  );
+  const [telegramApiSetup, setTelegramApiSetup] = useState<TelegramApiSetupStatus>({
+    configured: false,
+    api_id: null,
+    api_hash_set: false,
+  });
+  const [savingTelegramApiSetup, setSavingTelegramApiSetup] = useState(false);
 
   const sessionOptions = useMemo(() => sessions, [sessions]);
   const sessionViews = useMemo<SessionView[]>(() => {
@@ -1325,6 +1373,53 @@ function App() {
     }
   };
 
+  const handleClearLocalData = async () => {
+    const proceed = window.confirm(
+      "Clear local sessions, local logs, and app runtime data on this machine?\n\nLicense remains active."
+    );
+    if (!proceed) return;
+    setError(null);
+    setResettingData(true);
+    try {
+      const res = await api.resetLocalData({ include_api_setup: false });
+      await Promise.all([refreshSessions(), refreshJobs(), refreshLogs(), loadTelegramApiSetup()]);
+      updateNotice(
+        `Local data cleared (sessions: ${res.removed_sessions}, logs: ${res.removed_logs}, jobs stopped: ${res.stopped_jobs}).`
+      );
+    } catch (err: any) {
+      setError(err.message || "Failed to clear local data");
+    } finally {
+      setResettingData(false);
+    }
+  };
+
+  const handleFactoryReset = async () => {
+    const proceed = window.confirm(
+      "Factory reset this machine?\n\nThis clears local sessions, logs, API setup, and the local license token. You will need to activate again."
+    );
+    if (!proceed) return;
+    setError(null);
+    setResettingFactory(true);
+    try {
+      await api.resetLocalData({ include_api_setup: true });
+      if (isTauri()) {
+        await licensing.clearToken();
+      }
+      setLicenseKeyInput("");
+      setLicenseExp(null);
+      setLicenseKeyValue(null);
+      setLicenseEmail(null);
+      setLicenseActive(false);
+      setLicenseReady(true);
+      setWarning(null);
+      setNotice(null);
+    } catch (err: any) {
+      setError(err.message || "Failed to run factory reset");
+    } finally {
+      setResettingFactory(false);
+    }
+  };
+
 
   const refreshSessions = async () => {
     try {
@@ -1374,8 +1469,9 @@ function App() {
       setError("MTProxy secret is required");
       return;
     }
+    setSavingProxy(true);
     try {
-      await api.saveSessionProxy(proxyForm.session, {
+      const res = await api.saveSessionProxy(proxyForm.session, {
         proxy_type: proxyForm.proxy_type,
         hostname: proxyForm.hostname.trim(),
         port,
@@ -1383,10 +1479,12 @@ function App() {
         password: proxyForm.password || undefined,
         secret: proxyForm.secret || undefined,
       });
-      updateNotice("Proxy saved");
+      updateNotice(res.check?.message || "Proxy saved and validated");
       refreshSessions();
     } catch (err: any) {
       setError(err.message || "Failed to save proxy");
+    } finally {
+      setSavingProxy(false);
     }
   };
 
@@ -1412,6 +1510,24 @@ function App() {
       setAiDefaultId(res.default_id || "");
     } catch (err: any) {
       setError(err.message || "Failed to load AI settings");
+    }
+  };
+
+  const loadTelegramApiSetup = async () => {
+    try {
+      const res = await api.telegramApiSetup();
+      setTelegramApiSetup(res);
+      setTelegramApiSetupForm((prev) => ({
+        ...prev,
+        api_id: res.api_id || prev.api_id || "",
+      }));
+      if (!res.configured) {
+        setWarning(TELEGRAM_API_MISSING_MESSAGE);
+      } else {
+        setWarning((prev) => (prev === TELEGRAM_API_MISSING_MESSAGE ? null : prev));
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to load Telegram API setup");
     }
   };
 
@@ -1602,6 +1718,7 @@ function App() {
     if (!licenseActive) {
       return;
     }
+    loadTelegramApiSetup();
     refreshSessions();
     loadAiSettings();
     refreshPresets();
@@ -2547,6 +2664,148 @@ function App() {
     }
   };
 
+  const resetCreateSessionForm = () => {
+    setCreateSessionForm({
+      name: "",
+      phone: "",
+      login_id: "",
+      code: "",
+      password: "",
+      need_password: false,
+    });
+  };
+
+  const handleCreateSessionStart = async () => {
+    setError(null);
+    if (!createSessionForm.name.trim() || !createSessionForm.phone.trim()) {
+      setError("Session name and phone are required.");
+      return;
+    }
+    try {
+      const res = await api.createSessionStart({
+        name: createSessionForm.name.trim(),
+        phone: createSessionForm.phone.trim(),
+      });
+      setCreateSessionForm((prev) => ({
+        ...prev,
+        login_id: res.login_id,
+        code: "",
+        password: "",
+        need_password: false,
+      }));
+      updateNotice("Code sent. Enter the Telegram code to finish session creation.");
+    } catch (err: any) {
+      const message = err.message || "Failed to start session creation";
+      if (isMissingTelegramApiError(message)) {
+        setWarning(TELEGRAM_API_MISSING_MESSAGE);
+        setSessionsPanel("sessions-api");
+        setError(null);
+        return;
+      }
+      setError(message);
+    }
+  };
+
+  const handleCreateSessionFinish = async () => {
+    setError(null);
+    if (!createSessionForm.login_id) {
+      setError("Start session creation first.");
+      return;
+    }
+    if (!createSessionForm.need_password && !createSessionForm.code.trim()) {
+      setError("Enter the Telegram code.");
+      return;
+    }
+    if (createSessionForm.need_password && !createSessionForm.password) {
+      setError("Enter your Telegram 2FA password.");
+      return;
+    }
+    try {
+      const res = await api.createSessionFinish({
+        login_id: createSessionForm.login_id,
+        code: createSessionForm.code.trim() || undefined,
+        password: createSessionForm.password || undefined,
+      });
+      if (res.need_password) {
+        setCreateSessionForm((prev) => ({
+          ...prev,
+          need_password: true,
+          password: "",
+        }));
+        updateNotice("2FA password required. Enter it to complete sign-in.");
+        return;
+      }
+      if (!res.ok || !res.session?.name) {
+        setError("Session creation did not complete.");
+        return;
+      }
+      const created = res.session.name;
+      updateNotice(`Session created: ${created}`);
+      resetCreateSessionForm();
+      await refreshSessions();
+      setManagedSession(created);
+      setDeleteSession(created);
+      setRenameSession((prev) => ({ ...prev, old_name: created }));
+    } catch (err: any) {
+      setError(err.message || "Failed to finish session creation");
+    }
+  };
+
+  const handleCreateSessionCancel = async () => {
+    setError(null);
+    try {
+      if (createSessionForm.login_id) {
+        await api.createSessionCancel({ login_id: createSessionForm.login_id });
+      }
+      resetCreateSessionForm();
+      updateNotice("Session creation cancelled.");
+    } catch (err: any) {
+      setError(err.message || "Failed to cancel session creation");
+    }
+  };
+
+  const handleSaveTelegramApiSetup = async () => {
+    setError(null);
+    const apiId = telegramApiSetupForm.api_id.trim();
+    const apiHash = telegramApiSetupForm.api_hash.trim();
+    if (!apiId || !apiHash) {
+      setError("API_ID and API_HASH are required.");
+      return;
+    }
+    setSavingTelegramApiSetup(true);
+    try {
+      const res = await api.saveTelegramApiSetup({
+        api_id: apiId,
+        api_hash: apiHash,
+      });
+      setTelegramApiSetup(res);
+      setTelegramApiSetupForm({
+        api_id: res.api_id || apiId,
+        api_hash: "",
+      });
+      let restartFailed = false;
+      if (isTauri()) {
+        try {
+          await licensing.restartLocalBackend();
+        } catch {
+          restartFailed = true;
+        }
+      }
+      await loadTelegramApiSetup();
+      await refreshSessions();
+      if (restartFailed) {
+        setWarning("Credentials saved. Restart backend manually from Sessions -> API Setup context.");
+      } else {
+        setWarning(null);
+      }
+      updateNotice(isTauri() && !restartFailed ? "Telegram API credentials saved. Local backend restarted." : "Telegram API credentials saved.");
+    } catch (err: any) {
+      setError(err.message || "Failed to save Telegram API setup");
+    } finally {
+      setSavingTelegramApiSetup(false);
+    }
+  };
+
   const handleMergeCsv = async () => {
     setError(null);
     if (!mergeFiles || !mergeOutput) {
@@ -2661,6 +2920,7 @@ function App() {
   const sessionNavItems = [
     { id: "sessions-main", label: "Session management" },
     { id: "sessions-tools", label: "Config and Tools" },
+    { id: "sessions-api", label: "API Setup" },
   ];
   const multiNavItems = [
     { id: "multi-dm", label: "Multi DM" },
@@ -2961,11 +3221,17 @@ function App() {
             </div>
           </header>
 
-          {(notice || error) && (
+          {(notice || warning || error) && (
             <div className="alerts">
               {notice && (
                 <div key={`notice-${notice}`} className="alert-item alert-success">
                   <span>{notice}</span>
+                  <span className="alert-progress" />
+                </div>
+              )}
+              {warning && (
+                <div key={`warning-${warning}`} className="alert-item alert-warning">
+                  <span>{warning}</span>
                   <span className="alert-progress" />
                 </div>
               )}
@@ -3133,9 +3399,82 @@ function App() {
           <div className="panel" id="sessions-manage">
             <div className="panel-header">
               <h3>Session Management</h3>
-              <span className="hint">Rename, delete, import</span>
+              <span className="hint">Create, rename, delete, import</span>
             </div>
             <div className="form-grid">
+              <label>
+                Create new session
+                <div className="row">
+                  <input
+                    type="text"
+                    value={createSessionForm.name}
+                    onChange={(e) =>
+                      setCreateSessionForm((prev) => ({
+                        ...prev,
+                        name: e.target.value,
+                      }))
+                    }
+                    placeholder="session_name"
+                  />
+                  <input
+                    type="text"
+                    value={createSessionForm.phone}
+                    onChange={(e) =>
+                      setCreateSessionForm((prev) => ({
+                        ...prev,
+                        phone: e.target.value,
+                      }))
+                    }
+                    placeholder="+15551234567"
+                  />
+                  <button className="primary" onClick={handleCreateSessionStart}>
+                    Send code
+                  </button>
+                </div>
+              </label>
+
+              {createSessionForm.login_id && (
+                <label>
+                  Verify session sign-in
+                  <div className="row">
+                    {!createSessionForm.need_password && (
+                      <input
+                        type="text"
+                        value={createSessionForm.code}
+                        onChange={(e) =>
+                          setCreateSessionForm((prev) => ({
+                            ...prev,
+                            code: e.target.value,
+                          }))
+                        }
+                        placeholder="Telegram code"
+                      />
+                    )}
+                    <input
+                      type="password"
+                      value={createSessionForm.password}
+                      onChange={(e) =>
+                        setCreateSessionForm((prev) => ({
+                          ...prev,
+                          password: e.target.value,
+                        }))
+                      }
+                      placeholder={
+                        createSessionForm.need_password
+                          ? "2FA password (required)"
+                          : "2FA password (if enabled)"
+                      }
+                    />
+                    <button className="primary" onClick={handleCreateSessionFinish}>
+                      Verify
+                    </button>
+                    <button className="ghost" onClick={handleCreateSessionCancel}>
+                      Cancel
+                    </button>
+                  </div>
+                </label>
+              )}
+
               <label>
                 Rename session
                 <div className="row">
@@ -3190,6 +3529,55 @@ function App() {
                   </button>
                 </div>
               </label>
+            </div>
+          </div>
+          )}
+
+          {sessionsPanel === "sessions-api" && (
+          <div className="panel" id="sessions-api">
+            <div className="panel-header">
+              <h3>Telegram API Setup</h3>
+              <span className="hint">{telegramApiSetup.configured ? "Configured" : "Required for sessions"}</span>
+            </div>
+            <p className="helper-text">
+              Add your Telegram developer credentials from my.telegram.org. These are required to create or sign in sessions.
+              The app stores them in the local backend environment file and restarts the local backend automatically.
+            </p>
+            <div className="form-grid">
+              <label>
+                API_ID
+                <input
+                  type="text"
+                  value={telegramApiSetupForm.api_id}
+                  onChange={(e) =>
+                    setTelegramApiSetupForm((prev) => ({ ...prev, api_id: e.target.value }))
+                  }
+                  placeholder="12345678"
+                />
+              </label>
+              <label>
+                API_HASH
+                <input
+                  type="password"
+                  value={telegramApiSetupForm.api_hash}
+                  onChange={(e) =>
+                    setTelegramApiSetupForm((prev) => ({ ...prev, api_hash: e.target.value }))
+                  }
+                  placeholder={
+                    telegramApiSetup.api_hash_set
+                      ? "Stored (enter new value to rotate)"
+                      : "32-character hex value"
+                  }
+                />
+              </label>
+              <div className="row">
+                <button className="primary" onClick={handleSaveTelegramApiSetup} disabled={savingTelegramApiSetup}>
+                  {savingTelegramApiSetup ? "Saving..." : "Save API credentials"}
+                </button>
+                <button className="ghost" onClick={() => loadTelegramApiSetup()}>
+                  Reload
+                </button>
+              </div>
             </div>
           </div>
           )}
@@ -3294,6 +3682,9 @@ function App() {
                   />
                 </label>
               </div>
+              <p className="helper-text">
+                Proxies that require authentication must include username and password. Save runs a live connectivity check.
+              </p>
               {proxyForm.proxy_type === "mtproxy" && (
                 <label>
                   MTProxy secret
@@ -3306,8 +3697,8 @@ function App() {
                 </label>
               )}
               <div className="row">
-                <button className="primary" onClick={handleSaveProxy}>
-                  Save proxy
+                <button className="primary" onClick={handleSaveProxy} disabled={savingProxy}>
+                  {savingProxy ? "Testing proxy..." : "Save proxy"}
                 </button>
                 <button className="ghost" onClick={handleClearProxy}>
                   Remove proxy
@@ -5603,6 +5994,24 @@ function App() {
               Status
               <input type="text" value={licenseActive ? "Active" : "Inactive"} disabled />
             </label>
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-header">
+            <h3>Local data reset</h3>
+            <span className="hint">Recommended: keep license</span>
+          </div>
+          <p className="helper-text">
+            Clear local sessions, logs, and runtime state when troubleshooting. Keep license by default so users do not
+            need to reactivate.
+          </p>
+          <div className="row">
+            <button className="ghost" onClick={handleClearLocalData} disabled={resettingData || resettingFactory}>
+              {resettingData ? "Clearing data..." : "Clear local data (keep license)"}
+            </button>
+            <button className="danger" onClick={handleFactoryReset} disabled={resettingData || resettingFactory}>
+              {resettingFactory ? "Resetting..." : "Factory reset (clear data + license)"}
+            </button>
           </div>
         </div>
       </section>
