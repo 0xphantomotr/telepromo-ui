@@ -1,9 +1,14 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use ed25519_dalek::{Signature, SigningKey, Signer};
+use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::fs::OpenOptions;
+use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 use tauri::path::BaseDirectory;
 use tauri::Manager;
 
@@ -11,6 +16,7 @@ const KEYRING_SERVICE: &str = "tgcampaigner-control";
 const KEY_DEVICE_SK: &str = "device_sk_v1";
 const KEY_LICENSE_TOKEN: &str = "license_token_v1";
 const SECRETS_FILE_NAME: &str = "secrets.json";
+const BACKEND_PORT: u16 = 8000;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct SecretsFile {
@@ -61,9 +67,7 @@ fn keyring_get(name: &str) -> Option<String> {
 
 fn keyring_set(name: &str, value: &str) -> Result<(), String> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, name).map_err(|err| err.to_string())?;
-    entry
-        .set_password(value)
-        .map_err(|err| err.to_string())?;
+    entry.set_password(value).map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -139,6 +143,134 @@ fn clear_license_token(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn local_backend_addr() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], BACKEND_PORT))
+}
+
+fn local_backend_up() -> bool {
+    TcpStream::connect_timeout(&local_backend_addr(), Duration::from_millis(250)).is_ok()
+}
+
+fn local_backend_autostart_enabled() -> bool {
+    std::env::var("TGCAMPAIGNER_BACKEND_AUTOSTART")
+        .unwrap_or_else(|_| "1".to_string())
+        .trim()
+        != "0"
+}
+
+fn resolve_backend_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let env_bin = std::env::var("TGCAMPAIGNER_BACKEND_BIN")
+        .ok()
+        .map(PathBuf::from);
+    if let Some(path) = env_bin {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    let candidates = [
+        "backend/tgcampaigner-backend-linux-x64",
+        "backend/tgcampaigner-backend",
+        "resources/backend/tgcampaigner-backend-linux-x64",
+        "resources/backend/tgcampaigner-backend",
+        "tgcampaigner-backend-linux-x64",
+        "tgcampaigner-backend",
+    ];
+    for rel in candidates {
+        if let Ok(path) = app.path().resolve(rel, BaseDirectory::Resource) {
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn set_dir_mode(path: &PathBuf, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode));
+}
+
+fn start_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
+    if !local_backend_autostart_enabled() || local_backend_up() {
+        return Ok(());
+    }
+
+    let bin = resolve_backend_binary(app).ok_or_else(|| {
+        "No bundled backend sidecar found; expected resources/backend/tgcampaigner-backend-linux-x64".to_string()
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&bin, fs::Permissions::from_mode(0o755));
+    }
+
+    let backend_home = app
+        .path()
+        .resolve("backend-home", BaseDirectory::AppData)
+        .map_err(|err| err.to_string())?;
+    let backend_logs = backend_home.join("logs");
+    fs::create_dir_all(&backend_logs).map_err(|err| err.to_string())?;
+    #[cfg(unix)]
+    {
+        set_dir_mode(&backend_home, 0o700);
+        set_dir_mode(&backend_logs, 0o700);
+    }
+
+    let stdout_path = backend_logs.join("backend_stdout.log");
+    let stderr_path = backend_logs.join("backend_stderr.log");
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(stdout_path)
+        .map_err(|err| err.to_string())?;
+    let stderr = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(stderr_path)
+        .map_err(|err| err.to_string())?;
+
+    let mut cmd = Command::new(&bin);
+    cmd.env_clear()
+        .env("TGCAMPAIGNER_HOME", &backend_home)
+        .env(
+            "PATH",
+            std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string()),
+        )
+        .env(
+            "LANG",
+            std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".to_string()),
+        )
+        .env(
+            "LC_ALL",
+            std::env::var("LC_ALL").unwrap_or_else(|_| "C.UTF-8".to_string()),
+        )
+        .current_dir(&backend_home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+
+    let _child = cmd.spawn().map_err(|err| {
+        format!(
+            "Failed to start local backend sidecar '{}': {}",
+            bin.display(),
+            err
+        )
+    })?;
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if local_backend_up() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+
+    Err("Local backend sidecar started but did not become healthy on 127.0.0.1:8000".to_string())
+}
+
 #[tauri::command]
 fn licensing_device_public_key(app: tauri::AppHandle) -> Result<String, String> {
     let sk = get_or_create_device_signing_key(&app)?;
@@ -178,6 +310,12 @@ fn licensing_clear_token(app: tauri::AppHandle) -> Result<bool, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            if let Err(err) = start_local_backend(app.handle()) {
+                eprintln!("[tgcampaigner] backend autostart warning: {err}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             licensing_device_public_key,
             licensing_sign,

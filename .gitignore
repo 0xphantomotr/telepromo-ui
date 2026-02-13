@@ -23,3 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 .env
+.env.local
+.env.production
+src-tauri/resources/backend/tgcampaigner-backend-linux-x64
+src-tauri/resources/backend/tgcampaigner-backend-linux-x64.sha256
