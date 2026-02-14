@@ -60,10 +60,17 @@ const buildAuthHeaders = async (path: string, options?: RequestInit): Promise<Re
 async function request<T>(path: string, options?: RequestInit): Promise<ApiResponse<T>> {
   const authHeaders = await buildAuthHeaders(path, options);
   const baseHeaders = headersToRecord(options?.headers);
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...baseHeaders, ...authHeaders },
-    ...options,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      headers: { "Content-Type": "application/json", ...baseHeaders, ...authHeaders },
+      ...options,
+    });
+  } catch {
+    throw new Error(
+      `Cannot reach local backend at ${API_BASE}. If port 8000 is busy, stop old tgcampaigner-backend services and relaunch the app.`
+    );
+  }
   if (!res.ok) {
     let message = `Request failed: ${res.status}`;
     const text = await res.text();
@@ -89,6 +96,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<ApiRespo
       } catch {
         message = text;
       }
+    }
+    if (res.status >= 500 && /internal server error/i.test(message)) {
+      message =
+        "Local backend returned HTTP 500. This usually means a stale/broken backend process on port 8000. Stop old tgcampaigner-backend services and relaunch TGCampaigner.";
     }
     throw new Error(message || `Request failed: ${res.status}`);
   }

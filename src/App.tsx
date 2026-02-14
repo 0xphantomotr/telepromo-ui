@@ -1531,6 +1531,25 @@ function App() {
     }
   };
 
+  const ensureBackendReady = async () => {
+    if (!isTauri()) {
+      return true;
+    }
+    try {
+      const status = await licensing.backendStatus();
+      if (!status.healthy) {
+        setError(
+          status.startup_error ||
+            "Local backend is not healthy. Stop old tgcampaigner-backend services and relaunch the app."
+        );
+        return false;
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  };
+
   const resetAiProfileForm = () => {
     setAiProfileForm({
       label: "",
@@ -1718,18 +1737,34 @@ function App() {
     if (!licenseActive) {
       return;
     }
-    loadTelegramApiSetup();
-    refreshSessions();
-    loadAiSettings();
-    refreshPresets();
-    refreshWorkflows();
-    refreshLogs();
-    refreshJobs();
-    const interval = setInterval(() => {
+
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+
+    (async () => {
+      const ready = await ensureBackendReady();
+      if (!ready || cancelled) {
+        return;
+      }
+      loadTelegramApiSetup();
+      refreshSessions();
+      loadAiSettings();
+      refreshPresets();
+      refreshWorkflows();
       refreshLogs();
       refreshJobs();
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+      interval = setInterval(() => {
+        refreshLogs();
+        refreshJobs();
+      }, POLL_INTERVAL_MS);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
   }, [licenseActive]);
 
   useEffect(() => {

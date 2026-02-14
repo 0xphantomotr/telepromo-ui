@@ -4,9 +4,11 @@ use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::fs::OpenOptions;
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::path::BaseDirectory;
@@ -17,6 +19,64 @@ const KEY_DEVICE_SK: &str = "device_sk_v1";
 const KEY_LICENSE_TOKEN: &str = "license_token_v1";
 const SECRETS_FILE_NAME: &str = "secrets.json";
 const BACKEND_PORT: u16 = 8000;
+const BACKEND_HEALTH_TAG: &str = "\"ok\":true";
+
+#[cfg(target_os = "linux")]
+fn strip_snap_path_entries(value: &str) -> Option<String> {
+    let filtered: Vec<&str> = value
+        .split(':')
+        .filter(|part| !part.trim().is_empty() && !part.contains("/snap/"))
+        .collect();
+    if filtered.is_empty() {
+        None
+    } else {
+        Some(filtered.join(":"))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn sanitize_runtime_env_for_snap_conflicts() {
+    let keys: Vec<String> = std::env::vars().map(|(k, _)| k).collect();
+    for key in keys {
+        if key.starts_with("SNAP") {
+            std::env::remove_var(key);
+        }
+    }
+
+    for key in [
+        "LD_LIBRARY_PATH",
+        "GTK_PATH",
+        "GIO_EXTRA_MODULES",
+        "XDG_DATA_DIRS",
+        "XDG_CONFIG_DIRS",
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            if value.contains("/snap/") {
+                if let Some(next) = strip_snap_path_entries(&value) {
+                    std::env::set_var(key, next);
+                } else {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+    }
+
+    for key in [
+        "LD_PRELOAD",
+        "GTK_EXE_PREFIX",
+        "GTK_MODULES",
+        "GTK_IM_MODULE",
+        "GTK_IM_MODULE_FILE",
+        "GDK_PIXBUF_MODULEDIR",
+        "GDK_PIXBUF_MODULE_FILE",
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            if value.contains("/snap/") {
+                std::env::remove_var(key);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct SecretsFile {
@@ -147,8 +207,44 @@ fn local_backend_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], BACKEND_PORT))
 }
 
-fn local_backend_up() -> bool {
+fn local_backend_port_open() -> bool {
     TcpStream::connect_timeout(&local_backend_addr(), Duration::from_millis(250)).is_ok()
+}
+
+fn local_backend_health_raw() -> Option<String> {
+    let mut stream = TcpStream::connect_timeout(&local_backend_addr(), Duration::from_millis(300)).ok()?;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(700)));
+
+    let req = b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    stream.write_all(req).ok()?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok()?;
+    Some(response)
+}
+
+fn local_backend_up() -> bool {
+    local_backend_health_raw()
+        .map(|raw| raw.starts_with("HTTP/1.1 200") && raw.contains(BACKEND_HEALTH_TAG))
+        .unwrap_or(false)
+}
+
+fn backend_startup_error_cell() -> &'static Mutex<Option<String>> {
+    static CELL: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(None))
+}
+
+fn set_backend_startup_error(value: Option<String>) {
+    if let Ok(mut guard) = backend_startup_error_cell().lock() {
+        *guard = value;
+    }
+}
+
+fn get_backend_startup_error() -> Option<String> {
+    backend_startup_error_cell()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
 }
 
 fn local_backend_autostart_enabled() -> bool {
@@ -204,7 +300,14 @@ fn set_dir_mode(path: &PathBuf, mode: u32) {
 
 fn start_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
     if !local_backend_autostart_enabled() || local_backend_up() {
+        set_backend_startup_error(None);
         return Ok(());
+    }
+
+    if local_backend_port_open() {
+        let msg = "Port 8000 is already in use by a stale or unhealthy local backend process. Stop old tgcampaigner-backend services and relaunch TGCampaigner.".to_string();
+        set_backend_startup_error(Some(msg.clone()));
+        return Err(msg);
     }
 
     let bin = resolve_backend_binary(app).ok_or_else(|| {
@@ -277,12 +380,14 @@ fn start_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
         if local_backend_up() {
+            set_backend_startup_error(None);
             return Ok(());
         }
         thread::sleep(Duration::from_millis(250));
     }
-
-    Err("Local backend sidecar started but did not become healthy on 127.0.0.1:8000".to_string())
+    let msg = "Local backend sidecar started but did not become healthy on 127.0.0.1:8000".to_string();
+    set_backend_startup_error(Some(msg.clone()));
+    Err(msg)
 }
 
 #[cfg(unix)]
@@ -337,6 +442,20 @@ fn backend_restart(app: tauri::AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
+#[derive(Debug, Serialize)]
+struct BackendStatus {
+    healthy: bool,
+    startup_error: Option<String>,
+}
+
+#[tauri::command]
+fn backend_status() -> BackendStatus {
+    BackendStatus {
+        healthy: local_backend_up(),
+        startup_error: get_backend_startup_error(),
+    }
+}
+
 #[tauri::command]
 fn licensing_device_public_key(app: tauri::AppHandle) -> Result<String, String> {
     let sk = get_or_create_device_signing_key(&app)?;
@@ -374,15 +493,20 @@ fn licensing_clear_token(app: tauri::AppHandle) -> Result<bool, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    sanitize_runtime_env_for_snap_conflicts();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             if let Err(err) = start_local_backend(app.handle()) {
+                set_backend_startup_error(Some(err.clone()));
                 eprintln!("[tgcampaigner] backend autostart warning: {err}");
             }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            backend_status,
             backend_restart,
             licensing_device_public_key,
             licensing_sign,

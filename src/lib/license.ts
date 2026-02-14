@@ -81,4 +81,10 @@ export const licensing = {
     }
     return (await invoke("backend_restart")) as boolean;
   },
+  async backendStatus(): Promise<{ healthy: boolean; startup_error?: string | null }> {
+    if (!isTauri()) {
+      return { healthy: true, startup_error: null };
+    }
+    return (await invoke("backend_status")) as { healthy: boolean; startup_error?: string | null };
+  },
 };

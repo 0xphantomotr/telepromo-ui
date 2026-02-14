@@ -7,9 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "bash ./scripts/tauri_clean_env.sh",
     "prepare:linux-sidecar": "bash ./scripts/prepare_linux_backend_sidecar.sh",
-    "build:linux:standalone": "npm run prepare:linux-sidecar && tauri build"
+    "build:linux:standalone": "npm run prepare:linux-sidecar && npm run tauri build"
   },
   "dependencies": {
     "react": "^19.1.0",
