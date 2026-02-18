@@ -57,13 +57,45 @@ const buildAuthHeaders = async (path: string, options?: RequestInit): Promise<Re
   };
 };
 
+const parseErrorMessage = async (res: Response): Promise<string> => {
+  let message = `Request failed: ${res.status}`;
+  const text = await res.text();
+  if (!text) {
+    return message;
+  }
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown };
+    if (typeof parsed?.detail === "string") {
+      return parsed.detail;
+    }
+    if (Array.isArray(parsed?.detail)) {
+      const list = parsed.detail
+        .map((item) => {
+          if (!item || typeof item !== "object") {
+            return "";
+          }
+          const obj = item as { msg?: unknown };
+          return typeof obj.msg === "string" ? obj.msg : "";
+        })
+        .filter(Boolean)
+        .join("; ");
+      return list || message;
+    }
+    return text;
+  } catch {
+    return text;
+  }
+};
+
 async function request<T>(path: string, options?: RequestInit): Promise<ApiResponse<T>> {
   const authHeaders = await buildAuthHeaders(path, options);
   const baseHeaders = headersToRecord(options?.headers);
+  const isFormData = typeof FormData !== "undefined" && options?.body instanceof FormData;
+  const defaultHeaders: Record<string, string> = isFormData ? {} : { "Content-Type": "application/json" };
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
-      headers: { "Content-Type": "application/json", ...baseHeaders, ...authHeaders },
+      headers: { ...defaultHeaders, ...baseHeaders, ...authHeaders },
       ...options,
     });
   } catch {
@@ -72,31 +104,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<ApiRespo
     );
   }
   if (!res.ok) {
-    let message = `Request failed: ${res.status}`;
-    const text = await res.text();
-    if (text) {
-      try {
-        const parsed = JSON.parse(text) as { detail?: unknown };
-        if (typeof parsed?.detail === "string") {
-          message = parsed.detail;
-        } else if (Array.isArray(parsed?.detail)) {
-          message = parsed.detail
-            .map((item) => {
-              if (!item || typeof item !== "object") {
-                return "";
-              }
-              const obj = item as { msg?: unknown };
-              return typeof obj.msg === "string" ? obj.msg : "";
-            })
-            .filter(Boolean)
-            .join("; ");
-        } else {
-          message = text;
-        }
-      } catch {
-        message = text;
-      }
-    }
+    let message = await parseErrorMessage(res);
     if (res.status >= 500 && /internal server error/i.test(message)) {
       message =
         "Local backend returned HTTP 500. This usually means a stale/broken backend process on port 8000. Stop old tgcampaigner-backend services and relaunch TGCampaigner.";
@@ -330,6 +338,34 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  uploadFile: (kind: "csv" | "media" | "photo", file: File) => {
+    const params = new URLSearchParams({
+      kind,
+      filename: file.name || "upload.bin",
+    });
+    return fetch(`${API_BASE}/files/upload?${params.toString()}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+      },
+      body: file,
+    }).then(async (res) => {
+      if (!res.ok) {
+        throw new Error(await parseErrorMessage(res));
+      }
+      return (await res.json()) as {
+        ok: boolean;
+        kind: string;
+        relative_path: string;
+        saved_to: string;
+        original_name: string;
+        stored_name: string;
+        size_bytes: number;
+        max_bytes: number;
+        telegram_limit_hint: string;
+      };
+    });
+  },
   startDm: (payload: {
     session: string;
     input_file: string;

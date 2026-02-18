@@ -1,9 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type CSSProperties } from "react";
 import "./App.css";
 import { api } from "./lib/api";
-import { LICENSE_API_BASE, decodeTokenPayload, isTauri, licensing } from "./lib/license";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { LICENSE_API_BASE, decodeTokenPayload, isTauri, licensing, type UpdateCheckInfo } from "./lib/license";
+import { FilePathField } from "./components/FilePathField";
 
 const POLL_INTERVAL_MS = 6000;
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const UPDATE_MANIFEST_URL =
+  import.meta.env.VITE_UPDATE_MANIFEST_URL || "https://downloads.tgcampaigner.com/latest.json";
 
 const WORKFLOW_NODE_WIDTH = 96;
 const WORKFLOW_NODE_HEIGHT = 96;
@@ -902,6 +907,19 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckInfo | null>(null);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [preparingUpdate, setPreparingUpdate] = useState(false);
+  const [updateStatusMessage, setUpdateStatusMessage] = useState<string | null>(null);
+  const handleFileImportError = (message: string | null) => {
+    if (!message) return;
+    setError(message);
+    setNotice(null);
+  };
+  const handleFileImportNotice = (message: string) => {
+    setNotice(message);
+    setError(null);
+  };
 
   const [presets, setPresets] = useState<PresetItem[]>([]);
   const [dmPresetQuery, setDmPresetQuery] = useState("");
@@ -1729,9 +1747,106 @@ function App() {
     }
   };
 
+  const updateNotice = (message: string) => {
+    setNotice(message);
+    setError(null);
+  };
+
+  const hasRunningJobs = useMemo(
+    () => jobs.some((job) => job.status === "running"),
+    [jobs]
+  );
+
+  const checkForUpdates = useCallback(async () => {
+    if (!isTauri()) return;
+    setCheckingUpdates(true);
+    try {
+      const result = await licensing.updaterCheck(UPDATE_MANIFEST_URL);
+      setUpdateInfo(result);
+      if (result.error) {
+        setUpdateStatusMessage(`Update check failed: ${result.error}`);
+      } else if (result.available) {
+        setUpdateStatusMessage(
+          `Update ${result.latest_version} is available (current ${result.current_version}).`
+        );
+      } else {
+        setUpdateStatusMessage(`You are up to date (v${result.current_version}).`);
+      }
+    } catch (err: any) {
+      setUpdateStatusMessage(err?.message || "Update check failed.");
+    } finally {
+      setCheckingUpdates(false);
+    }
+  }, []);
+
+  const startUpdateFlow = useCallback(async () => {
+    if (!isTauri()) {
+      return;
+    }
+    if (!updateInfo || !updateInfo.available || !updateInfo.latest_version) {
+      setWarning("No update package is currently available.");
+      return;
+    }
+    if (!updateInfo.download_url) {
+      setWarning("Update is available, but manifest has no download URL.");
+      return;
+    }
+    if (hasRunningJobs) {
+      setError("Stop running jobs before applying an update.");
+      return;
+    }
+    setPreparingUpdate(true);
+    setUpdateStatusMessage("Preparing update backup and integrity checkpoint...");
+    try {
+      const prepared = await licensing.updaterPrepare(updateInfo.latest_version);
+      setUpdateStatusMessage(
+        `Backup created at ${prepared.backup_dir}. Opening the ${updateInfo.package_kind.toUpperCase()} package for install...`
+      );
+      await openUrl(updateInfo.download_url);
+      updateNotice(
+        "Installer opened. Complete the install, relaunch TGCampaigner, and post-update integrity will be verified automatically."
+      );
+    } catch (err: any) {
+      setError(err?.message || "Failed to prepare update.");
+    } finally {
+      setPreparingUpdate(false);
+    }
+  }, [hasRunningJobs, updateInfo]);
+
   useEffect(() => {
     loadLicense();
   }, []);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const finalize = await licensing.updaterFinalize();
+        if (cancelled) return;
+        if (finalize.checked && finalize.updated && finalize.message) {
+          if (finalize.integrity_ok) {
+            updateNotice(finalize.message);
+          } else {
+            setWarning(finalize.message);
+          }
+        }
+      } catch (err: any) {
+        if (cancelled) return;
+        setWarning(err?.message || "Failed to run post-update integrity check.");
+      }
+      await checkForUpdates();
+    })();
+    const interval = setInterval(() => {
+      checkForUpdates();
+    }, UPDATE_CHECK_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [checkForUpdates]);
 
   useEffect(() => {
     if (!licenseActive) {
@@ -1974,11 +2089,6 @@ function App() {
       window.removeEventListener("mouseup", handleUp);
     };
   }, [panning]);
-
-  const updateNotice = (message: string) => {
-    setNotice(message);
-    setError(null);
-  };
 
   const handleJobStart = async (label: string, jobPromise: Promise<{ job_id: string }>) => {
     setError(null);
@@ -2888,6 +2998,12 @@ function App() {
   const showMetrics = activeTab === "metrics";
   const showLicense = activeTab === "license";
   const runningJobs = useMemo(() => jobs.filter((job) => job.status === "running"), [jobs]);
+  const updateStatusIsError = updateStatusMessage?.toLowerCase().includes("failed") ?? false;
+  const showUpdateBanner =
+    isTauri() && (Boolean(updateInfo?.available) || checkingUpdates || preparingUpdate || updateStatusIsError);
+  const canInstallUpdate = Boolean(
+    updateInfo && updateInfo.available && updateInfo.latest_version && updateInfo.download_url
+  );
 
   const focusSession = (name: string) => {
     const next = name.trim();
@@ -3255,6 +3371,42 @@ function App() {
               <p className="subtle">Pick a section from the left navigation.</p>
             </div>
           </header>
+
+          {showUpdateBanner && (
+            <section className="update-banner">
+              <div>
+                <h3 className="update-banner-title">
+                  {updateInfo?.available
+                    ? `Update available: v${updateInfo.latest_version}`
+                    : "Desktop updater"}
+                </h3>
+                <p className="helper-text">
+                  {updateStatusMessage ||
+                    "Automatic check runs on startup and every 6 hours while the app stays open."}
+                </p>
+              </div>
+              <div className="update-banner-actions">
+                <button
+                  className="ghost"
+                  onClick={checkForUpdates}
+                  disabled={checkingUpdates || preparingUpdate}
+                >
+                  {checkingUpdates ? "Checking..." : "Check now"}
+                </button>
+                <button
+                  className="primary"
+                  onClick={startUpdateFlow}
+                  disabled={checkingUpdates || preparingUpdate || !canInstallUpdate || hasRunningJobs}
+                >
+                  {preparingUpdate
+                    ? "Preparing update..."
+                    : canInstallUpdate
+                      ? `Install v${updateInfo?.latest_version}`
+                      : "No update available"}
+                </button>
+              </div>
+            </section>
+          )}
 
           {(notice || warning || error) && (
             <div className="alerts">
@@ -4882,14 +5034,15 @@ function App() {
 	                  onChange={(next) => setDmForm({ ...dmForm, preset_name: next })}
 	                />
 	              </label>
-	              <label>
-	                CSV file
-	                <input
-                  type="text"
-                  value={dmForm.input_file}
-                  onChange={(e) => setDmForm({ ...dmForm, input_file: e.target.value })}
-                />
-              </label>
+              <FilePathField
+                label="CSV file"
+                kind="csv"
+                accept=".csv,text/csv"
+                value={dmForm.input_file}
+                onChange={(next) => setDmForm({ ...dmForm, input_file: next })}
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
               <label>
                 Message
                 <textarea
@@ -4898,15 +5051,15 @@ function App() {
                   rows={3}
                 />
               </label>
-              <label>
-                Media path (optional)
-                <input
-                  type="text"
-                  value={dmForm.media_path}
-                  onChange={(e) => setDmForm({ ...dmForm, media_path: e.target.value })}
-                  placeholder="data/test.jpg"
-                />
-              </label>
+              <FilePathField
+                label="Media path (optional)"
+                kind="media"
+                value={dmForm.media_path}
+                onChange={(next) => setDmForm({ ...dmForm, media_path: next })}
+                placeholder="data/uploads/media/file.jpg"
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -4989,14 +5142,15 @@ function App() {
 	                  onChange={(next) => setInviteForm({ ...inviteForm, preset_name: next })}
 	                />
 	              </label>
-	              <label>
-	                CSV file
-	                <input
-                  type="text"
-                  value={inviteForm.input_file}
-                  onChange={(e) => setInviteForm({ ...inviteForm, input_file: e.target.value })}
-                />
-              </label>
+              <FilePathField
+                label="CSV file"
+                kind="csv"
+                accept=".csv,text/csv"
+                value={inviteForm.input_file}
+                onChange={(next) => setInviteForm({ ...inviteForm, input_file: next })}
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
               <label>
                 Invite URL
                 <input
@@ -5014,15 +5168,15 @@ function App() {
                   rows={3}
                 />
               </label>
-              <label>
-                Media path (optional)
-                <input
-                  type="text"
-                  value={inviteForm.media_path}
-                  onChange={(e) => setInviteForm({ ...inviteForm, media_path: e.target.value })}
-                  placeholder="data/test.jpg"
-                />
-              </label>
+              <FilePathField
+                label="Media path (optional)"
+                kind="media"
+                value={inviteForm.media_path}
+                onChange={(next) => setInviteForm({ ...inviteForm, media_path: next })}
+                placeholder="data/uploads/media/file.jpg"
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -5106,14 +5260,15 @@ function App() {
 	                  onChange={(next) => setBulkAddForm({ ...bulkAddForm, preset_name: next })}
 	                />
 	              </label>
-	              <label>
-	                CSV file
-	                <input
-                  type="text"
-                  value={bulkAddForm.input_file}
-                  onChange={(e) => setBulkAddForm({ ...bulkAddForm, input_file: e.target.value })}
-                />
-              </label>
+              <FilePathField
+                label="CSV file"
+                kind="csv"
+                accept=".csv,text/csv"
+                value={bulkAddForm.input_file}
+                onChange={(next) => setBulkAddForm({ ...bulkAddForm, input_file: next })}
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
               <label>
                 Target group (@group or id)
                 <input
@@ -5160,14 +5315,15 @@ function App() {
 	                  onChange={(next) => setForwardForm({ ...forwardForm, preset_name: next })}
 	                />
 	              </label>
-	              <label>
-	                CSV file
-	                <input
-                  type="text"
-                  value={forwardForm.input_file}
-                  onChange={(e) => setForwardForm({ ...forwardForm, input_file: e.target.value })}
-                />
-              </label>
+              <FilePathField
+                label="CSV file"
+                kind="csv"
+                accept=".csv,text/csv"
+                value={forwardForm.input_file}
+                onChange={(next) => setForwardForm({ ...forwardForm, input_file: next })}
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
               <label>
                 Source peer (@channel or id)
                 <input
@@ -5267,15 +5423,16 @@ function App() {
                   rows={3}
                 />
               </label>
-              <label>
-                Photo path
-                <input
-                  type="text"
-                  value={profileForm.photo}
-                  onChange={(e) => setProfileForm({ ...profileForm, photo: e.target.value })}
-                  placeholder="data/avatar.jpg"
-                />
-              </label>
+              <FilePathField
+                label="Photo path"
+                kind="photo"
+                accept="image/jpeg,image/png,image/webp"
+                value={profileForm.photo}
+                onChange={(next) => setProfileForm({ ...profileForm, photo: next })}
+                placeholder="data/uploads/photo/avatar.jpg"
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
               <button
                 className="primary"
                 onClick={() =>
@@ -5391,14 +5548,15 @@ function App() {
               <span className="hint">All sessions DM CSV</span>
             </div>
             <div className="form-grid">
-              <label>
-                CSV file
-                <input
-                  type="text"
-                  value={multiForm.input_file}
-                  onChange={(e) => setMultiForm({ ...multiForm, input_file: e.target.value })}
-                />
-              </label>
+              <FilePathField
+                label="CSV file"
+                kind="csv"
+                accept=".csv,text/csv"
+                value={multiForm.input_file}
+                onChange={(next) => setMultiForm({ ...multiForm, input_file: next })}
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
 	              <label>
 	                Preset
 	                <PresetSelect
@@ -5417,14 +5575,15 @@ function App() {
                   rows={3}
                 />
               </label>
-              <label>
-                Media path (optional)
-                <input
-                  type="text"
-                  value={multiForm.media_path}
-                  onChange={(e) => setMultiForm({ ...multiForm, media_path: e.target.value })}
-                />
-              </label>
+              <FilePathField
+                label="Media path (optional)"
+                kind="media"
+                value={multiForm.media_path}
+                onChange={(next) => setMultiForm({ ...multiForm, media_path: next })}
+                placeholder="data/uploads/media/file.jpg"
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -5498,14 +5657,15 @@ function App() {
               <span className="hint">Invite link + message</span>
             </div>
 	            <div className="form-grid">
-              <label>
-                CSV file
-                <input
-                  type="text"
-                  value={multiInviteForm.input_file}
-                  onChange={(e) => setMultiInviteForm({ ...multiInviteForm, input_file: e.target.value })}
-                />
-              </label>
+              <FilePathField
+                label="CSV file"
+                kind="csv"
+                accept=".csv,text/csv"
+                value={multiInviteForm.input_file}
+                onChange={(next) => setMultiInviteForm({ ...multiInviteForm, input_file: next })}
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
 	              <label>
 	                Preset
 	                <PresetSelect
@@ -5532,14 +5692,15 @@ function App() {
                   rows={3}
                 />
               </label>
-              <label>
-                Media path (optional)
-                <input
-                  type="text"
-                  value={multiInviteForm.media_path}
-                  onChange={(e) => setMultiInviteForm({ ...multiInviteForm, media_path: e.target.value })}
-                />
-              </label>
+              <FilePathField
+                label="Media path (optional)"
+                kind="media"
+                value={multiInviteForm.media_path}
+                onChange={(next) => setMultiInviteForm({ ...multiInviteForm, media_path: next })}
+                placeholder="data/uploads/media/file.jpg"
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
               <div className="toggles">
                 <label className="toggle">
                   <input
@@ -5614,14 +5775,15 @@ function App() {
               <span className="hint">Add users with multiple accounts</span>
             </div>
 	            <div className="form-grid">
-              <label>
-                CSV file
-                <input
-                  type="text"
-                  value={multiBulkAddForm.input_file}
-                  onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, input_file: e.target.value })}
-                />
-              </label>
+              <FilePathField
+                label="CSV file"
+                kind="csv"
+                accept=".csv,text/csv"
+                value={multiBulkAddForm.input_file}
+                onChange={(next) => setMultiBulkAddForm({ ...multiBulkAddForm, input_file: next })}
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
 	              <label>
 	                Preset
 	                <PresetSelect
@@ -5669,14 +5831,15 @@ function App() {
               <span className="hint">Forward from source with many accounts</span>
             </div>
 	            <div className="form-grid">
-              <label>
-                CSV file
-                <input
-                  type="text"
-                  value={multiForwardForm.input_file}
-                  onChange={(e) => setMultiForwardForm({ ...multiForwardForm, input_file: e.target.value })}
-                />
-              </label>
+              <FilePathField
+                label="CSV file"
+                kind="csv"
+                accept=".csv,text/csv"
+                value={multiForwardForm.input_file}
+                onChange={(next) => setMultiForwardForm({ ...multiForwardForm, input_file: next })}
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
 	              <label>
 	                Preset
 	                <PresetSelect
@@ -5794,14 +5957,16 @@ function App() {
                   rows={3}
                 />
               </label>
-              <label>
-                Photo path
-                <input
-                  type="text"
-                  value={multiProfileForm.photo}
-                  onChange={(e) => setMultiProfileForm({ ...multiProfileForm, photo: e.target.value })}
-                />
-              </label>
+              <FilePathField
+                label="Photo path"
+                kind="photo"
+                accept="image/jpeg,image/png,image/webp"
+                value={multiProfileForm.photo}
+                onChange={(next) => setMultiProfileForm({ ...multiProfileForm, photo: next })}
+                placeholder="data/uploads/photo/avatar.jpg"
+                onError={handleFileImportError}
+                onNotice={handleFileImportNotice}
+              />
               <button
                 className="primary"
                 onClick={() => {
@@ -6031,6 +6196,63 @@ function App() {
             </label>
           </div>
         </div>
+        {isTauri() && (
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Desktop updates</h3>
+              <span className="hint">{updateInfo?.available ? "Update ready" : "Auto-check enabled"}</span>
+            </div>
+            <p className="helper-text">
+              Before installation, TGCampaigner creates a local backup and verifies data integrity on next launch. If
+              verification fails, backup restore runs automatically.
+            </p>
+            <div className="form-grid">
+              <label>
+                Current version
+                <input type="text" value={updateInfo?.current_version || "Unknown"} disabled />
+              </label>
+              <label>
+                Latest version
+                <input
+                  type="text"
+                  value={updateInfo?.latest_version || updateInfo?.current_version || "Not available"}
+                  disabled
+                />
+              </label>
+              <label>
+                Package
+                <input type="text" value={(updateInfo?.package_kind || "appimage").toUpperCase()} disabled />
+              </label>
+              <label>
+                Status
+                <input
+                  type="text"
+                  value={updateStatusMessage || "Automatic check runs on startup and every 6 hours."}
+                  disabled
+                />
+              </label>
+            </div>
+            <div className="row">
+              <button className="ghost" onClick={checkForUpdates} disabled={checkingUpdates || preparingUpdate}>
+                {checkingUpdates ? "Checking..." : "Check for updates"}
+              </button>
+              <button
+                className="primary"
+                onClick={startUpdateFlow}
+                disabled={checkingUpdates || preparingUpdate || !canInstallUpdate || hasRunningJobs}
+              >
+                {preparingUpdate
+                  ? "Preparing update..."
+                  : canInstallUpdate
+                    ? `Download v${updateInfo?.latest_version}`
+                    : "No update available"}
+              </button>
+            </div>
+            {hasRunningJobs && canInstallUpdate && (
+              <p className="helper-text">Stop active jobs before starting an update.</p>
+            )}
+          </div>
+        )}
         <div className="panel">
           <div className="panel-header">
             <h3>Local data reset</h3>

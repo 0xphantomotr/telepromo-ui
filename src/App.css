@@ -880,6 +880,32 @@ pre {
   line-height: 1.4;
 }
 
+.file-path-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  background: rgba(11, 13, 18, 0.55);
+}
+
+.file-path-field.drag-active {
+  border-color: rgba(76, 201, 240, 0.65);
+  background: rgba(76, 201, 240, 0.08);
+}
+
+.file-path-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.file-path-hidden-input {
+  display: none;
+}
+
 .row {
   display: flex;
   gap: 12px;
@@ -918,6 +944,34 @@ details summary {
   flex-direction: column;
   gap: 10px;
   margin-bottom: 16px;
+}
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(76, 201, 240, 0.35);
+  background: rgba(76, 201, 240, 0.08);
+}
+
+.update-banner-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.update-banner .helper-text {
+  margin: 4px 0 0;
+}
+
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .danger {
@@ -1456,6 +1510,11 @@ select option {
 
   .overview-grid {
     grid-template-columns: 1fr;
+  }
+
+  .update-banner {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .single-layout {

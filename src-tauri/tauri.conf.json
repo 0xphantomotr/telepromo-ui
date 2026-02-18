@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TGCampaigner",
-  "version": "0.1.0",
+  "mainBinaryName": "tgcampaigner",
+  "version": "0.1.2",
   "identifier": "tgcampaigner",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -28,6 +29,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "TGCampaigner",
+    "homepage": "https://tgcampaigner.com",
+    "copyright": "© 2026 TGCampaigner",
+    "license": "Proprietary",
+    "category": "Utility",
+    "shortDescription": "Desktop Telegram campaign operations console.",
+    "longDescription": "TGCampaigner is a desktop control panel for session management, campaign workflows, telemetry, and license-backed operation tooling.",
     "resources": [
       "resources/backend"
     ],

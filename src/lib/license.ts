@@ -11,6 +11,35 @@ type TokenPayload = {
   ver?: number;
 };
 
+export type UpdateCheckInfo = {
+  current_version: string;
+  latest_version?: string | null;
+  available: boolean;
+  package_kind: string;
+  manifest_url: string;
+  download_url?: string | null;
+  notes?: string | null;
+  published_at?: string | null;
+  error?: string | null;
+};
+
+export type UpdatePrepareInfo = {
+  ok: boolean;
+  from_version: string;
+  to_version: string;
+  backup_dir: string;
+};
+
+export type UpdateFinalizeInfo = {
+  checked: boolean;
+  updated: boolean;
+  restored: boolean;
+  integrity_ok: boolean;
+  message: string;
+  from_version?: string | null;
+  to_version?: string | null;
+};
+
 export const isTauri = () =>
   typeof window !== "undefined" && typeof (window as any).__TAURI_INTERNALS__ !== "undefined";
 
@@ -86,5 +115,41 @@ export const licensing = {
       return { healthy: true, startup_error: null };
     }
     return (await invoke("backend_status")) as { healthy: boolean; startup_error?: string | null };
+  },
+  async updaterCheck(manifestUrl?: string): Promise<UpdateCheckInfo> {
+    if (!isTauri()) {
+      return {
+        current_version: "dev",
+        latest_version: null,
+        available: false,
+        package_kind: "dev",
+        manifest_url: manifestUrl || "",
+        download_url: null,
+        notes: null,
+        published_at: null,
+        error: null,
+      };
+    }
+    return (await invoke("updater_check", { manifestUrl })) as UpdateCheckInfo;
+  },
+  async updaterPrepare(toVersion: string): Promise<UpdatePrepareInfo> {
+    if (!isTauri()) {
+      throw new Error("Updater is only available in desktop builds.");
+    }
+    return (await invoke("updater_prepare", { toVersion })) as UpdatePrepareInfo;
+  },
+  async updaterFinalize(): Promise<UpdateFinalizeInfo> {
+    if (!isTauri()) {
+      return {
+        checked: false,
+        updated: false,
+        restored: false,
+        integrity_ok: true,
+        message: "",
+        from_version: null,
+        to_version: null,
+      };
+    }
+    return (await invoke("updater_finalize")) as UpdateFinalizeInfo;
   },
 };
