@@ -9,9 +9,14 @@ type FilePathFieldProps = {
   onChange: (next: string) => void;
   kind: UploadKind;
   accept?: string;
-  placeholder?: string;
   onError?: (message: string | null) => void;
   onNotice?: (message: string) => void;
+};
+
+const STORAGE_PATH_BY_KIND: Record<UploadKind, string> = {
+  csv: "data/uploads/csv/",
+  media: "data/uploads/media/",
+  photo: "data/uploads/photo/",
 };
 
 export function FilePathField({
@@ -20,7 +25,6 @@ export function FilePathField({
   onChange,
   kind,
   accept,
-  placeholder,
   onError,
   onNotice,
 }: FilePathFieldProps) {
@@ -78,7 +82,6 @@ export function FilePathField({
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
         />
       </label>
       <div className="file-path-actions">
@@ -105,6 +108,9 @@ export function FilePathField({
           e.currentTarget.value = "";
         }}
       />
+      <p className="helper-text">
+        Imported files are stored locally in <code>{STORAGE_PATH_BY_KIND[kind]}</code>.
+      </p>
       {savedPath ? <p className="helper-text">Saved locally at: {savedPath}</p> : null}
       {savedHint ? <p className="helper-text">{savedHint}</p> : null}
     </div>

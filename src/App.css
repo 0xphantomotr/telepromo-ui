@@ -880,6 +880,21 @@ pre {
   line-height: 1.4;
 }
 
+.helper-text code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  color: #b7d9ea;
+}
+
+.inline-warning {
+  border: 1px solid rgba(242, 183, 96, 0.45);
+  background: rgba(242, 183, 96, 0.14);
+  color: #ffddaa;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 .file-path-field {
   display: flex;
   flex-direction: column;
@@ -900,6 +915,26 @@ pre {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.license-section .section-header {
+  margin-bottom: 12px;
+}
+
+.license-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.license-grid-wide {
+  grid-column: 1 / -1;
+}
+
+.license-details-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
 }
 
 .file-path-hidden-input {
@@ -1509,6 +1544,11 @@ select option {
   }
 
   .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .license-grid,
+  .license-details-grid {
     grid-template-columns: 1fr;
   }
 

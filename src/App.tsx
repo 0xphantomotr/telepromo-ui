@@ -1107,26 +1107,26 @@ function App() {
 
   const [dmForm, setDmForm] = useState<DmForm>({
     session: "",
-    input_file: "data/shqipo.csv",
+    input_file: "",
     message: "",
     ...baseOptions,
   });
   const [inviteForm, setInviteForm] = useState<InviteForm>({
     session: "",
-    input_file: "data/shqipo.csv",
+    input_file: "",
     invite_url: "",
     message: "",
     ...baseOptions,
   });
   const [bulkAddForm, setBulkAddForm] = useState<BulkAddForm>({
     session: "",
-    input_file: "data/shqipo.csv",
+    input_file: "",
     target_ref: "",
     ...baseOptions,
   });
   const [forwardForm, setForwardForm] = useState<ForwardForm>({
     session: "",
-    input_file: "data/shqipo.csv",
+    input_file: "",
     source_peer: "",
     message_id: "",
     message_link: "",
@@ -1149,23 +1149,23 @@ function App() {
 
 
   const [multiForm, setMultiForm] = useState<MultiForm>({
-    input_file: "data/shqipo.csv",
+    input_file: "",
     message: "",
     ...baseOptions,
   });
   const [multiInviteForm, setMultiInviteForm] = useState<MultiInviteForm>({
-    input_file: "data/shqipo.csv",
+    input_file: "",
     invite_url: "",
     message: "",
     ...baseOptions,
   });
   const [multiBulkAddForm, setMultiBulkAddForm] = useState<MultiBulkAddForm>({
-    input_file: "data/shqipo.csv",
+    input_file: "",
     target_ref: "",
     ...baseOptions,
   });
   const [multiForwardForm, setMultiForwardForm] = useState<MultiForwardForm>({
-    input_file: "data/shqipo.csv",
+    input_file: "",
     source_peer: "",
     message_id: "",
     message_link: "",
@@ -2189,7 +2189,7 @@ function App() {
       config = {
         preset_name: presetNames[0] || "",
         message: "",
-        input_file: "data/shqipo.csv",
+        input_file: "",
         media_path: "",
         use_spintax: false,
         spintax_ai: false,
@@ -2200,21 +2200,21 @@ function App() {
         preset_name: presetNames[0] || "",
         invite_url: "",
         message: "",
-        input_file: "data/shqipo.csv",
+        input_file: "",
         media_path: "",
         use_spintax: false,
         spintax_ai: false,
         spintax_variations: 5,
       };
     } else if (type === "bulk_add") {
-      config = { preset_name: presetNames[0] || "", target_ref: "", input_file: "data/shqipo.csv" };
+      config = { preset_name: presetNames[0] || "", target_ref: "", input_file: "" };
     } else if (type === "forward") {
       config = {
         preset_name: presetNames[0] || "",
         message_link: "",
         drop_author: false,
         has_media: false,
-        input_file: "data/shqipo.csv",
+        input_file: "",
       };
     } else if (type === "warmup") {
       config = { preset_name: warmupPresetNames[0] || "", targets: "me" };
@@ -3782,9 +3782,12 @@ function App() {
                   type="text"
                   value={mergeFiles}
                   onChange={(e) => setMergeFiles(e.target.value)}
-                  placeholder="data/a.csv, data/b.csv"
                 />
               </label>
+              <p className="helper-text">
+                CSV paths are read from the local backend data folder. Imported files are available under{' '}
+                <code>data/uploads/csv/</code>.
+              </p>
               <label>
                 Output file
                 <input
@@ -3794,6 +3797,9 @@ function App() {
                   placeholder="merged.csv"
                 />
               </label>
+              <p className="helper-text">
+                Output is saved inside the same local data folder (example: <code>merged/contacts.csv</code>).
+              </p>
               <button className="primary" onClick={handleMergeCsv}>
                 Merge
               </button>
@@ -4144,6 +4150,12 @@ function App() {
                 </>
               ) : (
                 <>
+                  {aiReadyProfiles.length === 0 && (
+                    <div className="inline-warning">
+                      Warmup checks are active, but no AI profile with API key is configured. Reply and Message modes
+                      are locked, so only React mode can run until AI setup is completed.
+                    </div>
+                  )}
                   <div className="row">
                     <label>
                       Total messages
@@ -5056,7 +5068,6 @@ function App() {
                 kind="media"
                 value={dmForm.media_path}
                 onChange={(next) => setDmForm({ ...dmForm, media_path: next })}
-                placeholder="data/uploads/media/file.jpg"
                 onError={handleFileImportError}
                 onNotice={handleFileImportNotice}
               />
@@ -5173,7 +5184,6 @@ function App() {
                 kind="media"
                 value={inviteForm.media_path}
                 onChange={(next) => setInviteForm({ ...inviteForm, media_path: next })}
-                placeholder="data/uploads/media/file.jpg"
                 onError={handleFileImportError}
                 onNotice={handleFileImportNotice}
               />
@@ -5429,7 +5439,6 @@ function App() {
                 accept="image/jpeg,image/png,image/webp"
                 value={profileForm.photo}
                 onChange={(next) => setProfileForm({ ...profileForm, photo: next })}
-                placeholder="data/uploads/photo/avatar.jpg"
                 onError={handleFileImportError}
                 onNotice={handleFileImportNotice}
               />
@@ -5580,7 +5589,6 @@ function App() {
                 kind="media"
                 value={multiForm.media_path}
                 onChange={(next) => setMultiForm({ ...multiForm, media_path: next })}
-                placeholder="data/uploads/media/file.jpg"
                 onError={handleFileImportError}
                 onNotice={handleFileImportNotice}
               />
@@ -5697,7 +5705,6 @@ function App() {
                 kind="media"
                 value={multiInviteForm.media_path}
                 onChange={(next) => setMultiInviteForm({ ...multiInviteForm, media_path: next })}
-                placeholder="data/uploads/media/file.jpg"
                 onError={handleFileImportError}
                 onNotice={handleFileImportNotice}
               />
@@ -5963,7 +5970,6 @@ function App() {
                 accept="image/jpeg,image/png,image/webp"
                 value={multiProfileForm.photo}
                 onChange={(next) => setMultiProfileForm({ ...multiProfileForm, photo: next })}
-                placeholder="data/uploads/photo/avatar.jpg"
                 onError={handleFileImportError}
                 onNotice={handleFileImportNotice}
               />
@@ -6165,110 +6171,112 @@ function App() {
       )}
 
       {showLicense && (
-      <section className="section">
+      <section className="section license-section">
         <div className="section-header">
           <h2>License</h2>
         </div>
-        <div className="panel">
-          <div className="panel-header">
-            <h3>Current machine license</h3>
-          </div>
-          <div className="form-grid">
-            <label>
-              License key
-              <input type="text" value={licenseKeyValue || "Not available"} disabled />
-            </label>
-            <label>
-              Customer email
-              <input type="text" value={licenseEmail || "Not available"} disabled />
-            </label>
-            <label>
-              Token expiry
-              <input
-                type="text"
-                value={licenseExp ? new Date(licenseExp * 1000).toLocaleString() : "Not available"}
-                disabled
-              />
-            </label>
-            <label>
-              Status
-              <input type="text" value={licenseActive ? "Active" : "Inactive"} disabled />
-            </label>
-          </div>
-        </div>
-        {isTauri() && (
+        <div className="license-grid">
           <div className="panel">
             <div className="panel-header">
-              <h3>Desktop updates</h3>
-              <span className="hint">{updateInfo?.available ? "Update ready" : "Auto-check enabled"}</span>
+              <h3>Current machine license</h3>
             </div>
-            <p className="helper-text">
-              Before installation, TGCampaigner creates a local backup and verifies data integrity on next launch. If
-              verification fails, backup restore runs automatically.
-            </p>
-            <div className="form-grid">
+            <div className="license-details-grid">
               <label>
-                Current version
-                <input type="text" value={updateInfo?.current_version || "Unknown"} disabled />
+                License key
+                <input type="text" value={licenseKeyValue || "Not available"} disabled />
               </label>
               <label>
-                Latest version
+                Customer email
+                <input type="text" value={licenseEmail || "Not available"} disabled />
+              </label>
+              <label>
+                Token expiry
                 <input
                   type="text"
-                  value={updateInfo?.latest_version || updateInfo?.current_version || "Not available"}
+                  value={licenseExp ? new Date(licenseExp * 1000).toLocaleString() : "Not available"}
                   disabled
                 />
-              </label>
-              <label>
-                Package
-                <input type="text" value={(updateInfo?.package_kind || "appimage").toUpperCase()} disabled />
               </label>
               <label>
                 Status
-                <input
-                  type="text"
-                  value={updateStatusMessage || "Automatic check runs on startup and every 6 hours."}
-                  disabled
-                />
+                <input type="text" value={licenseActive ? "Active" : "Inactive"} disabled />
               </label>
             </div>
+          </div>
+          {isTauri() && (
+            <div className="panel">
+              <div className="panel-header">
+                <h3>Desktop updates</h3>
+                <span className="hint">{updateInfo?.available ? "Update ready" : "Auto-check enabled"}</span>
+              </div>
+              <p className="helper-text">
+                Before installation, TGCampaigner creates a local backup and verifies data integrity on next launch. If
+                verification fails, backup restore runs automatically.
+              </p>
+              <div className="license-details-grid">
+                <label>
+                  Current version
+                  <input type="text" value={updateInfo?.current_version || "Unknown"} disabled />
+                </label>
+                <label>
+                  Latest version
+                  <input
+                    type="text"
+                    value={updateInfo?.latest_version || updateInfo?.current_version || "Not available"}
+                    disabled
+                  />
+                </label>
+                <label>
+                  Package
+                  <input type="text" value={(updateInfo?.package_kind || "appimage").toUpperCase()} disabled />
+                </label>
+                <label>
+                  Status
+                  <input
+                    type="text"
+                    value={updateStatusMessage || "Automatic check runs on startup and every 6 hours."}
+                    disabled
+                  />
+                </label>
+              </div>
+              <div className="row">
+                <button className="ghost" onClick={checkForUpdates} disabled={checkingUpdates || preparingUpdate}>
+                  {checkingUpdates ? "Checking..." : "Check for updates"}
+                </button>
+                <button
+                  className="primary"
+                  onClick={startUpdateFlow}
+                  disabled={checkingUpdates || preparingUpdate || !canInstallUpdate || hasRunningJobs}
+                >
+                  {preparingUpdate
+                    ? "Preparing update..."
+                    : canInstallUpdate
+                      ? `Download v${updateInfo?.latest_version}`
+                      : "No update available"}
+                </button>
+              </div>
+              {hasRunningJobs && canInstallUpdate && (
+                <p className="helper-text">Stop active jobs before starting an update.</p>
+              )}
+            </div>
+          )}
+          <div className="panel license-grid-wide">
+            <div className="panel-header">
+              <h3>Local data reset</h3>
+              <span className="hint">Recommended: keep license</span>
+            </div>
+            <p className="helper-text">
+              Clear local sessions, logs, and runtime state when troubleshooting. Keep license by default so users do not
+              need to reactivate.
+            </p>
             <div className="row">
-              <button className="ghost" onClick={checkForUpdates} disabled={checkingUpdates || preparingUpdate}>
-                {checkingUpdates ? "Checking..." : "Check for updates"}
+              <button className="ghost" onClick={handleClearLocalData} disabled={resettingData || resettingFactory}>
+                {resettingData ? "Clearing data..." : "Clear local data (keep license)"}
               </button>
-              <button
-                className="primary"
-                onClick={startUpdateFlow}
-                disabled={checkingUpdates || preparingUpdate || !canInstallUpdate || hasRunningJobs}
-              >
-                {preparingUpdate
-                  ? "Preparing update..."
-                  : canInstallUpdate
-                    ? `Download v${updateInfo?.latest_version}`
-                    : "No update available"}
+              <button className="danger" onClick={handleFactoryReset} disabled={resettingData || resettingFactory}>
+                {resettingFactory ? "Resetting..." : "Factory reset (clear data + license)"}
               </button>
             </div>
-            {hasRunningJobs && canInstallUpdate && (
-              <p className="helper-text">Stop active jobs before starting an update.</p>
-            )}
-          </div>
-        )}
-        <div className="panel">
-          <div className="panel-header">
-            <h3>Local data reset</h3>
-            <span className="hint">Recommended: keep license</span>
-          </div>
-          <p className="helper-text">
-            Clear local sessions, logs, and runtime state when troubleshooting. Keep license by default so users do not
-            need to reactivate.
-          </p>
-          <div className="row">
-            <button className="ghost" onClick={handleClearLocalData} disabled={resettingData || resettingFactory}>
-              {resettingData ? "Clearing data..." : "Clear local data (keep license)"}
-            </button>
-            <button className="danger" onClick={handleFactoryReset} disabled={resettingData || resettingFactory}>
-              {resettingFactory ? "Resetting..." : "Factory reset (clear data + license)"}
-            </button>
           </div>
         </div>
       </section>

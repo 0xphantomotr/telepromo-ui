@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TGCampaigner",
   "mainBinaryName": "tgcampaigner",
-  "version": "0.1.2",
+  "version": "0.1.5",
   "identifier": "tgcampaigner",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -14,12 +14,14 @@
     "windows": [
       {
         "title": "TGCampaigner",
-        "width": 800,
-        "height": 600,
+        "width": 1500,
+        "height": 920,
+        "minWidth": 1280,
+        "minHeight": 760,
         "maximized": true,
-        "resizable": false,
-        "minimizable": false,
-        "maximizable": false
+        "resizable": true,
+        "minimizable": true,
+        "maximizable": true
       }
     ],
     "security": {
@@ -31,7 +33,7 @@
     "targets": "all",
     "publisher": "TGCampaigner",
     "homepage": "https://tgcampaigner.com",
-    "copyright": "© 2026 TGCampaigner",
+    "copyright": "\u00a9 2026 TGCampaigner",
     "license": "Proprietary",
     "category": "Utility",
     "shortDescription": "Desktop Telegram campaign operations console.",

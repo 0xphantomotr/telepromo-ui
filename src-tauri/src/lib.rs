@@ -57,6 +57,7 @@ struct UpdateManifest {
     download_url: Option<String>,
     downloads: Option<ManifestDownloads>,
     linux: Option<ManifestDownloads>,
+    windows: Option<ManifestDownloads>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -64,6 +65,9 @@ struct ManifestDownloads {
     appimage: Option<String>,
     deb: Option<String>,
     rpm: Option<String>,
+    msi: Option<String>,
+    nsis: Option<String>,
+    exe: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -402,6 +406,39 @@ fn backend_pid_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(backend_home_dir(app)?.join("backend.pid"))
 }
 
+#[cfg(target_os = "linux")]
+fn backend_sidecar_candidates() -> &'static [&'static str] {
+    &[
+        "backend/tgcampaigner-backend-linux-x64",
+        "backend/tgcampaigner-backend",
+        "resources/backend/tgcampaigner-backend-linux-x64",
+        "resources/backend/tgcampaigner-backend",
+        "tgcampaigner-backend-linux-x64",
+        "tgcampaigner-backend",
+    ]
+}
+
+#[cfg(target_os = "windows")]
+fn backend_sidecar_candidates() -> &'static [&'static str] {
+    &[
+        "backend/tgcampaigner-backend-windows-x64.exe",
+        "backend/tgcampaigner-backend.exe",
+        "resources/backend/tgcampaigner-backend-windows-x64.exe",
+        "resources/backend/tgcampaigner-backend.exe",
+        "tgcampaigner-backend-windows-x64.exe",
+        "tgcampaigner-backend.exe",
+    ]
+}
+
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+fn backend_sidecar_candidates() -> &'static [&'static str] {
+    &[
+        "backend/tgcampaigner-backend",
+        "resources/backend/tgcampaigner-backend",
+        "tgcampaigner-backend",
+    ]
+}
+
 fn resolve_backend_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
     let env_bin = std::env::var("TGCAMPAIGNER_BACKEND_BIN")
         .ok()
@@ -412,15 +449,7 @@ fn resolve_backend_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
     }
 
-    let candidates = [
-        "backend/tgcampaigner-backend-linux-x64",
-        "backend/tgcampaigner-backend",
-        "resources/backend/tgcampaigner-backend-linux-x64",
-        "resources/backend/tgcampaigner-backend",
-        "tgcampaigner-backend-linux-x64",
-        "tgcampaigner-backend",
-    ];
-    for rel in candidates {
+    for rel in backend_sidecar_candidates() {
         if let Ok(path) = app.path().resolve(rel, BaseDirectory::Resource) {
             if path.exists() {
                 return Some(path);
@@ -449,7 +478,8 @@ fn start_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
     }
 
     let bin = resolve_backend_binary(app).ok_or_else(|| {
-        "No bundled backend sidecar found; expected resources/backend/tgcampaigner-backend-linux-x64".to_string()
+        let expected = backend_sidecar_candidates().join(", ");
+        format!("No bundled backend sidecar found; expected one of: {expected}")
     })?;
 
     #[cfg(unix)]
@@ -481,21 +511,28 @@ fn start_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
         .map_err(|err| err.to_string())?;
 
     let mut cmd = Command::new(&bin);
-    cmd.env_clear()
-        .env("TGCAMPAIGNER_HOME", &backend_home)
-        .env(
-            "PATH",
-            std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string()),
-        )
-        .env(
-            "LANG",
-            std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".to_string()),
-        )
-        .env(
-            "LC_ALL",
-            std::env::var("LC_ALL").unwrap_or_else(|_| "C.UTF-8".to_string()),
-        )
-        .current_dir(&backend_home)
+    #[cfg(target_os = "windows")]
+    {
+        cmd.env("TGCAMPAIGNER_HOME", &backend_home);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        cmd.env_clear()
+            .env("TGCAMPAIGNER_HOME", &backend_home)
+            .env(
+                "PATH",
+                std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string()),
+            )
+            .env(
+                "LANG",
+                std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".to_string()),
+            )
+            .env(
+                "LC_ALL",
+                std::env::var("LC_ALL").unwrap_or_else(|_| "C.UTF-8".to_string()),
+            );
+    }
+    cmd.current_dir(&backend_home)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
@@ -563,8 +600,31 @@ fn stop_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn stop_local_backend(_app: &tauri::AppHandle) -> Result<(), String> {
-    Err("Automatic backend restart is only implemented for unix builds.".to_string())
+fn stop_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
+    let pid_path = backend_pid_path(app)?;
+    let pid_raw = fs::read_to_string(&pid_path).map_err(|err| err.to_string())?;
+    let pid = pid_raw
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| "Invalid backend pid file".to_string())?;
+    let _ = Command::new("taskkill")
+        .arg("/PID")
+        .arg(pid.to_string())
+        .arg("/T")
+        .arg("/F")
+        .status();
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        if !local_backend_up() {
+            let _ = fs::remove_file(&pid_path);
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    let _ = fs::remove_file(&pid_path);
+    Ok(())
 }
 
 fn command_exists(binary: &str) -> bool {
@@ -572,13 +632,34 @@ fn command_exists(binary: &str) -> bool {
         .map(|paths| {
             std::env::split_paths(&paths).any(|dir| {
                 let candidate = dir.join(binary);
-                candidate.is_file()
+                if candidate.is_file() {
+                    return true;
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    for ext in ["exe", "cmd", "bat"] {
+                        let with_ext = dir.join(format!("{binary}.{ext}"));
+                        if with_ext.is_file() {
+                            return true;
+                        }
+                    }
+                }
+                false
             })
         })
         .unwrap_or(false)
 }
 
-fn detect_linux_package_kind() -> String {
+#[cfg(target_os = "windows")]
+fn detect_package_kind() -> String {
+    if command_exists("msiexec") {
+        return "msi".to_string();
+    }
+    "nsis".to_string()
+}
+
+#[cfg(target_os = "linux")]
+fn detect_package_kind() -> String {
     if std::env::var_os("APPIMAGE").is_some() {
         return "appimage".to_string();
     }
@@ -597,6 +678,11 @@ fn detect_linux_package_kind() -> String {
     if command_exists("rpm") {
         return "rpm".to_string();
     }
+    "appimage".to_string()
+}
+
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+fn detect_package_kind() -> String {
     "appimage".to_string()
 }
 
@@ -648,6 +734,21 @@ fn select_download_url(manifest: &UpdateManifest, package_kind: &str) -> Option<
         match key {
             "deb" => downloads.deb.clone(),
             "rpm" => downloads.rpm.clone(),
+            "msi" => downloads
+                .msi
+                .clone()
+                .or_else(|| downloads.exe.clone())
+                .or_else(|| downloads.nsis.clone()),
+            "nsis" => downloads
+                .nsis
+                .clone()
+                .or_else(|| downloads.exe.clone())
+                .or_else(|| downloads.msi.clone()),
+            "exe" => downloads
+                .exe
+                .clone()
+                .or_else(|| downloads.nsis.clone())
+                .or_else(|| downloads.msi.clone()),
             _ => downloads.appimage.clone(),
         }
     };
@@ -662,6 +763,11 @@ fn select_download_url(manifest: &UpdateManifest, package_kind: &str) -> Option<
         }
     }
     if let Some(downloads) = manifest.linux.as_ref() {
+        if let Some(url) = pick(downloads, package_kind) {
+            return Some(url);
+        }
+    }
+    if let Some(downloads) = manifest.windows.as_ref() {
         if let Some(url) = pick(downloads, package_kind) {
             return Some(url);
         }
@@ -797,7 +903,7 @@ fn updater_check(manifest_url: Option<String>) -> UpdateCheckResponse {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| DEFAULT_UPDATE_MANIFEST_URL.to_string());
-    let package_kind = detect_linux_package_kind();
+    let package_kind = detect_package_kind();
     match fetch_manifest(&manifest_url) {
         Ok(manifest) => {
             let latest_version = manifest.version.trim().to_string();
@@ -997,6 +1103,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            if let Some(main_window) = app.get_webview_window("main") {
+                let _ = main_window.maximize();
+            }
             if let Err(err) = start_local_backend(app.handle()) {
                 set_backend_startup_error(Some(err.clone()));
                 eprintln!("[tgcampaigner] backend autostart warning: {err}");

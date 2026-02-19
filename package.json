@@ -1,15 +1,18 @@
 {
   "name": "tauri-apptgcampaigner-ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.5",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "tauri:raw": "npx tauri",
     "tauri": "bash ./scripts/tauri_clean_env.sh",
     "prepare:linux-sidecar": "bash ./scripts/prepare_linux_backend_sidecar.sh",
-    "build:linux:standalone": "npm run prepare:linux-sidecar && npm run tauri build"
+    "prepare:windows-sidecar": "powershell -ExecutionPolicy Bypass -File ./scripts/prepare_windows_backend_sidecar.ps1",
+    "build:linux:standalone": "npm run prepare:linux-sidecar && npm run tauri build",
+    "build:windows:standalone": "npm run prepare:windows-sidecar && npm run tauri:raw build -- --bundles nsis,msi"
   },
   "dependencies": {
     "react": "^19.1.0",

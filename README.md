@@ -37,6 +37,24 @@ The build script will:
 2. Copy it into `src-tauri/resources/backend/`.
 3. Run `tauri build` and include it in Linux bundles.
 
+## Build Windows Standalone (bundled backend sidecar)
+Run this on a Windows machine with Python + Rust + Node installed.
+
+```powershell
+npm run build:windows:standalone
+```
+
+The build script will:
+1. Build `telegramGatherTool` sidecar binary (`tgcampaigner-backend-windows-x64.exe`).
+2. Copy it into `src-tauri/resources/backend/`.
+3. Run `tauri build --bundles nsis,msi`.
+
+If you only need to refresh the sidecar artifact:
+
+```powershell
+npm run prepare:windows-sidecar
+```
+
 ## Features (MVP)
 - Backend status
 - Sessions list
