@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       platform:
-        description: "Platform to build"
+        description: Platform to build
         required: true
         default: windows
         type: choice
@@ -18,21 +18,10 @@ on:
       - "v*"
 
 jobs:
-  build:
-    name: Build (${{ matrix.label }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(
-        github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'windows' &&
-        '{"include":[{"label":"windows","os":"windows-2022"}]}' ||
-        github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux' &&
-        '{"include":[{"label":"linux","os":"ubuntu-22.04"}]}' ||
-        github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'macos' &&
-        '{"include":[{"label":"macos","os":"macos-14"}]}' ||
-        '{"include":[{"label":"linux","os":"ubuntu-22.04"},{"label":"windows","os":"windows-2022"},{"label":"macos","os":"macos-14"}]}'
-      ) }}
-
+  build-linux:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'linux' || github.event.inputs.platform == 'all' }}
+    name: Build (linux)
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,7 +36,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Linux build deps
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -64,7 +52,6 @@ jobs:
         run: npm run tauri build
 
       - name: Upload Linux artifacts
-        if: matrix.label == 'linux'
         uses: actions/upload-artifact@v4
         with:
           name: tgcampaigner-linux
@@ -75,8 +62,30 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  build-windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'windows' || github.event.inputs.platform == 'all' }}
+    name: Build (windows)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build Tauri bundles
+        run: npm run tauri build
+
       - name: Upload Windows artifacts
-        if: matrix.label == 'windows'
         uses: actions/upload-artifact@v4
         with:
           name: tgcampaigner-windows
@@ -86,8 +95,30 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  build-macos:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'macos' || github.event.inputs.platform == 'all' }}
+    name: Build (macos)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build Tauri bundles
+        run: npm run tauri build
+
       - name: Upload macOS artifacts
-        if: matrix.label == 'macos'
         uses: actions/upload-artifact@v4
         with:
           name: tgcampaigner-macos
