@@ -71,8 +71,16 @@ jobs:
     env:
       VITE_LICENSE_API_BASE: https://license.tgcampaigner.com
     steps:
-      - name: Checkout
+      - name: Checkout UI repo
         uses: actions/checkout@v4
+
+      - name: Checkout backend repo
+        uses: actions/checkout@v4
+        with:
+          repository: 0xphantomotr/telepromo
+          ref: main
+          path: telepromo
+          token: ${{ secrets.TELEPROMO_REPO_TOKEN || github.token }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -83,8 +91,32 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install frontend deps
         run: npm ci
+
+      - name: Build Windows backend sidecar
+        shell: pwsh
+        run: |
+          $backendRoot = Join-Path $env:GITHUB_WORKSPACE "telepromo\telegramGatherTool"
+          if (!(Test-Path $backendRoot)) {
+            throw "Backend root not found at $backendRoot. If backend repo is private, add TELEPROMO_REPO_TOKEN secret."
+          }
+          powershell -ExecutionPolicy Bypass -File .\scripts\prepare_windows_backend_sidecar.ps1 -BackendRoot $backendRoot
+
+      - name: Verify Windows backend sidecar output
+        shell: pwsh
+        run: |
+          if (!(Test-Path "src-tauri/resources/backend/tgcampaigner-backend-windows-x64.exe")) {
+            throw "Missing src-tauri/resources/backend/tgcampaigner-backend-windows-x64.exe"
+          }
+          if (!(Test-Path "src-tauri/resources/backend/tgcampaigner-backend-windows-x64.exe.sha256")) {
+            throw "Missing src-tauri/resources/backend/tgcampaigner-backend-windows-x64.exe.sha256"
+          }
 
       - name: Build Tauri bundles
         run: npm run tauri build
