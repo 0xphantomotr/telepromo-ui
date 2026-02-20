@@ -19,35 +19,19 @@ on:
 
 jobs:
   build:
-    if: |
-      github.event_name != 'workflow_dispatch' ||
-      github.event.inputs.platform == 'all' ||
-      github.event.inputs.platform == matrix.label
     name: Build (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - label: linux
-            os: ubuntu-22.04
-            artifact_name: tgcampaigner-linux
-            artifact_glob: |
-              src-tauri/target/release/bundle/**/*.deb
-              src-tauri/target/release/bundle/**/*.rpm
-              src-tauri/target/release/bundle/**/*.AppImage
-          - label: windows
-            os: windows-2022
-            artifact_name: tgcampaigner-windows
-            artifact_glob: |
-              src-tauri/target/release/bundle/**/*.exe
-              src-tauri/target/release/bundle/**/*.msi
-          - label: macos
-            os: macos-14
-            artifact_name: tgcampaigner-macos
-            artifact_glob: |
-              src-tauri/target/release/bundle/**/*.dmg
-              src-tauri/target/release/bundle/**/*.app.tar.gz
+      matrix: ${{ fromJSON(
+        github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'windows' &&
+        '{"include":[{"label":"windows","os":"windows-2022"}]}' ||
+        github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux' &&
+        '{"include":[{"label":"linux","os":"ubuntu-22.04"}]}' ||
+        github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'macos' &&
+        '{"include":[{"label":"macos","os":"macos-14"}]}' ||
+        '{"include":[{"label":"linux","os":"ubuntu-22.04"},{"label":"windows","os":"windows-2022"},{"label":"macos","os":"macos-14"}]}'
+      ) }}
 
     steps:
       - name: Checkout
@@ -79,10 +63,36 @@ jobs:
       - name: Build Tauri bundles
         run: npm run tauri build
 
-      - name: Upload build artifacts
+      - name: Upload Linux artifacts
+        if: matrix.label == 'linux'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_glob }}
+          name: tgcampaigner-linux
+          path: |
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.rpm
+            src-tauri/target/release/bundle/**/*.AppImage
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload Windows artifacts
+        if: matrix.label == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tgcampaigner-windows
+          path: |
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.msi
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload macOS artifacts
+        if: matrix.label == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tgcampaigner-macos
+          path: |
+            src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/target/release/bundle/**/*.app.tar.gz
           if-no-files-found: error
           retention-days: 3
