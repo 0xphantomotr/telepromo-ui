@@ -111,6 +111,12 @@ jobs:
           } else {
             throw "Backend root not found under $backendCandidateA or $backendCandidateB. If backend repo is private, add TELEPROMO_REPO_TOKEN secret."
           }
+          $venvDir = Join-Path $backendRoot "venv"
+          $venvPy = Join-Path $venvDir "Scripts\python.exe"
+          if ((Test-Path $venvDir) -and !(Test-Path $venvPy)) {
+            Write-Host "Removing non-Windows backend venv at $venvDir so sidecar build can recreate it."
+            Remove-Item -Recurse -Force $venvDir
+          }
           powershell -ExecutionPolicy Bypass -File .\scripts\prepare_windows_backend_sidecar.ps1 -BackendRoot $backendRoot
 
       - name: Verify Windows backend sidecar output
