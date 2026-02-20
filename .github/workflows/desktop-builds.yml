@@ -22,6 +22,8 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'linux' || github.event.inputs.platform == 'all' }}
     name: Build (linux)
     runs-on: ubuntu-22.04
+    env:
+      VITE_LICENSE_API_BASE: https://license.tgcampaigner.com
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,6 +68,8 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'windows' || github.event.inputs.platform == 'all' }}
     name: Build (windows)
     runs-on: windows-2022
+    env:
+      VITE_LICENSE_API_BASE: https://license.tgcampaigner.com
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -99,6 +103,8 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'macos' || github.event.inputs.platform == 'all' }}
     name: Build (macos)
     runs-on: macos-14
+    env:
+      VITE_LICENSE_API_BASE: https://license.tgcampaigner.com
     steps:
       - name: Checkout
         uses: actions/checkout@v4
