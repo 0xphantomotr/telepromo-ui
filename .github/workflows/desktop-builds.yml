@@ -2,12 +2,27 @@ name: Desktop Builds
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to build"
+        required: true
+        default: windows
+        type: choice
+        options:
+          - windows
+          - linux
+          - macos
+          - all
   push:
     tags:
       - "v*"
 
 jobs:
   build:
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == matrix.label
     name: Build (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -70,3 +85,4 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_glob }}
           if-no-files-found: error
+          retention-days: 3
