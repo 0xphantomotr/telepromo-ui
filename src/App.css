@@ -885,6 +885,10 @@ pre {
   color: #b7d9ea;
 }
 
+.helper-text.warning {
+  color: #ffcf8a;
+}
+
 .inline-warning {
   border: 1px solid rgba(242, 183, 96, 0.45);
   background: rgba(242, 183, 96, 0.14);
@@ -908,6 +912,31 @@ pre {
 .file-path-field.drag-active {
   border-color: rgba(76, 201, 240, 0.65);
   background: rgba(76, 201, 240, 0.08);
+}
+
+.file-path-field.compact {
+  gap: 6px;
+  padding: 8px;
+  border-style: solid;
+  border-color: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(8, 10, 15, 0.5);
+}
+
+.file-path-field.compact label {
+  margin-bottom: 0;
+}
+
+.file-path-field.compact .file-path-actions {
+  gap: 8px;
+}
+
+.file-path-field.compact .file-path-actions .ghost {
+  padding: 6px 10px;
+}
+
+.file-path-field.compact .hint {
+  font-size: 0.7rem;
 }
 
 .file-path-actions {

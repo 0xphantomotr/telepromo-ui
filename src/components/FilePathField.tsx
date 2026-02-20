@@ -11,6 +11,9 @@ type FilePathFieldProps = {
   accept?: string;
   onError?: (message: string | null) => void;
   onNotice?: (message: string) => void;
+  compact?: boolean;
+  showStorageHint?: boolean;
+  showSavedDetails?: boolean;
 };
 
 const STORAGE_PATH_BY_KIND: Record<UploadKind, string> = {
@@ -27,6 +30,9 @@ export function FilePathField({
   accept,
   onError,
   onNotice,
+  compact = false,
+  showStorageHint = true,
+  showSavedDetails = true,
 }: FilePathFieldProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -50,7 +56,7 @@ export function FilePathField({
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to import file";
-      onError?.(message);
+      onError?.(`Could not import ${file.name}: ${message}`);
     } finally {
       setUploading(false);
     }
@@ -58,7 +64,7 @@ export function FilePathField({
 
   return (
     <div
-      className={`file-path-field ${dragActive ? "drag-active" : ""}`}
+      className={`file-path-field ${compact ? "compact" : ""} ${dragActive ? "drag-active" : ""}`.trim()}
       onDragOver={(e) => {
         e.preventDefault();
         setDragActive(true);
@@ -93,7 +99,7 @@ export function FilePathField({
         >
           {uploading ? "Importing..." : "Choose file"}
         </button>
-        <span className="hint">or drop file here</span>
+        <span className="hint">{compact ? "or drop here" : "or drop file here"}</span>
       </div>
       <input
         ref={fileInputRef}
@@ -108,11 +114,13 @@ export function FilePathField({
           e.currentTarget.value = "";
         }}
       />
-      <p className="helper-text">
-        Imported files are stored locally in <code>{STORAGE_PATH_BY_KIND[kind]}</code>.
-      </p>
-      {savedPath ? <p className="helper-text">Saved locally at: {savedPath}</p> : null}
-      {savedHint ? <p className="helper-text">{savedHint}</p> : null}
+      {showStorageHint ? (
+        <p className="helper-text">
+          Imported files are stored locally in <code>{STORAGE_PATH_BY_KIND[kind]}</code>.
+        </p>
+      ) : null}
+      {showSavedDetails && savedPath ? <p className="helper-text">Saved locally at: {savedPath}</p> : null}
+      {showSavedDetails && savedHint ? <p className="helper-text">{savedHint}</p> : null}
     </div>
   );
 }

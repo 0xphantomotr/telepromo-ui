@@ -513,6 +513,9 @@ fn start_local_backend(app: &tauri::AppHandle) -> Result<(), String> {
     let mut cmd = Command::new(&bin);
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        // Launch backend sidecar without showing a console window.
+        cmd.creation_flags(0x08000000);
         cmd.env("TGCAMPAIGNER_HOME", &backend_home);
     }
     #[cfg(not(target_os = "windows"))]

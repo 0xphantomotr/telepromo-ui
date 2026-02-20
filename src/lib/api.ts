@@ -57,18 +57,31 @@ const buildAuthHeaders = async (path: string, options?: RequestInit): Promise<Re
   };
 };
 
-const parseErrorMessage = async (res: Response): Promise<string> => {
+const endpointFromPath = (path?: string): string => {
+  if (!path) {
+    return "";
+  }
+  return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+};
+
+const parseErrorMessage = async (
+  res: Response,
+  context?: { path?: string; method?: string }
+): Promise<string> => {
   let message = `Request failed: ${res.status}`;
   const text = await res.text();
   if (!text) {
+    if (res.status === 404 && context?.path) {
+      const endpoint = endpointFromPath(context.path);
+      return `Backend endpoint not found (${context.method || "GET"} ${endpoint}). Update/restart TGCampaigner and try again.`;
+    }
     return message;
   }
   try {
     const parsed = JSON.parse(text) as { detail?: unknown };
     if (typeof parsed?.detail === "string") {
-      return parsed.detail;
-    }
-    if (Array.isArray(parsed?.detail)) {
+      message = parsed.detail;
+    } else if (Array.isArray(parsed?.detail)) {
       const list = parsed.detail
         .map((item) => {
           if (!item || typeof item !== "object") {
@@ -79,10 +92,27 @@ const parseErrorMessage = async (res: Response): Promise<string> => {
         })
         .filter(Boolean)
         .join("; ");
-      return list || message;
+      message = list || message;
+    } else {
+      message = text;
     }
-    return text;
+
+    const looksLikeGenericNotFound =
+      res.status === 404 &&
+      (/^not found$/i.test(message.trim()) || /^request failed: 404$/i.test(message.trim()));
+    if (looksLikeGenericNotFound && context?.path) {
+      const endpoint = endpointFromPath(context.path);
+      if (context.path.startsWith("/files/upload")) {
+        return `CSV/media upload route is missing (${context.method || "POST"} ${endpoint}). This usually means an outdated local backend sidecar. Update/reinstall TGCampaigner, then relaunch.`;
+      }
+      return `Backend endpoint not found (${context.method || "GET"} ${endpoint}). Update/restart TGCampaigner and try again.`;
+    }
+    return message;
   } catch {
+    if (res.status === 404 && context?.path) {
+      const endpoint = endpointFromPath(context.path);
+      return `Backend endpoint not found (${context.method || "GET"} ${endpoint}). Update/restart TGCampaigner and try again.`;
+    }
     return text;
   }
 };
@@ -104,7 +134,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<ApiRespo
     );
   }
   if (!res.ok) {
-    let message = await parseErrorMessage(res);
+    let message = await parseErrorMessage(res, {
+      path,
+      method: (options?.method || "GET").toUpperCase(),
+    });
     if (res.status >= 500 && /internal server error/i.test(message)) {
       message =
         "Local backend returned HTTP 500. This usually means a stale/broken backend process on port 8000. Stop old tgcampaigner-backend services and relaunch TGCampaigner.";
@@ -343,15 +376,27 @@ export const api = {
       kind,
       filename: file.name || "upload.bin",
     });
-    return fetch(`${API_BASE}/files/upload?${params.toString()}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": file.type || "application/octet-stream",
-      },
-      body: file,
-    }).then(async (res) => {
+    const path = `/files/upload?${params.toString()}`;
+    const method = "POST";
+    return buildAuthHeaders(path, { method }).then(async (authHeaders) => {
+      let res: Response;
+      try {
+        res = await fetch(`${API_BASE}${path}`, {
+          method,
+          headers: {
+            "Content-Type": file.type || "application/octet-stream",
+            ...authHeaders,
+          },
+          body: file,
+        });
+      } catch {
+        throw new Error(
+          `Cannot reach local backend at ${API_BASE}. If port 8000 is busy, stop old tgcampaigner-backend services and relaunch the app.`
+        );
+      }
+
       if (!res.ok) {
-        throw new Error(await parseErrorMessage(res));
+        throw new Error(await parseErrorMessage(res, { path, method }));
       }
       return (await res.json()) as {
         ok: boolean;

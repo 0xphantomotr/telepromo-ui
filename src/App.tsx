@@ -41,6 +41,8 @@ const WORKFLOW_NODE_ICONS: Record<string, string> = {
 };
 const SPINTAX_HELP =
   "Spintax picks a random option inside {a|b}. Example: Hey {friend|there}! AI Spintax auto-generates variations using your default AI profile.";
+const AI_SPINTAX_SETUP_HINT =
+  "AI Spintax requires an AI profile with API key. Configure it in Craft presets -> AI profiles.";
 
 const navIconStyle = (src: string): CSSProperties => ({ "--icon": `url(${src})` } as CSSProperties);
 
@@ -985,6 +987,7 @@ function App() {
 
   const presetOptions = useMemo(() => dmPresets, [dmPresets]);
   const aiReadyProfiles = useMemo(() => aiProfiles.filter((profile) => profile.has_key), [aiProfiles]);
+  const hasAiProfiles = aiReadyProfiles.length > 0;
 
   const filteredWorkflows = useMemo(() => {
     const q = normalizeText(workflowQuery);
@@ -2001,7 +2004,6 @@ function App() {
     if (presetForm.kind !== "warmup") {
       return;
     }
-    const hasAiProfiles = aiReadyProfiles.length > 0;
     const currentModes = presetForm.warmup_modes || [];
     if (!hasAiProfiles) {
       if (currentModes.length !== 1 || currentModes[0] !== "react") {
@@ -2023,7 +2025,34 @@ function App() {
     if (!needsAiProfile && presetForm.ai_profile_id) {
       setPresetForm((prev) => ({ ...prev, ai_profile_id: "" }));
     }
-  }, [aiReadyProfiles, aiDefaultId, presetForm.kind, presetForm.warmup_modes, presetForm.ai_profile_id]);
+  }, [hasAiProfiles, aiReadyProfiles, aiDefaultId, presetForm.kind, presetForm.warmup_modes, presetForm.ai_profile_id]);
+
+  useEffect(() => {
+    if (hasAiProfiles) {
+      return;
+    }
+    const clearAiSpintax = <T extends CommonOptions>(form: T): T => {
+      if (!form.spintax_ai) {
+        return form;
+      }
+      return { ...form, spintax_ai: false };
+    };
+    setDmForm((prev) => clearAiSpintax(prev));
+    setInviteForm((prev) => clearAiSpintax(prev));
+    setMultiForm((prev) => clearAiSpintax(prev));
+    setMultiInviteForm((prev) => clearAiSpintax(prev));
+    setWorkflowDraft((draft) => {
+      let changed = false;
+      const nodes = draft.nodes.map((node) => {
+        if ((node.type === "dm" || node.type === "invite") && (node.config as Record<string, unknown>).spintax_ai) {
+          changed = true;
+          return { ...node, config: { ...node.config, spintax_ai: false } };
+        }
+        return node;
+      });
+      return changed ? { ...draft, nodes } : draft;
+    });
+  }, [hasAiProfiles]);
 
   useEffect(() => {
     if (!draggingNode) return;
@@ -2464,6 +2493,9 @@ function App() {
           errors.push(`DM node ${node.id} needs a message.`);
         }
         if (config.use_spintax && config.spintax_ai) {
+          if (!hasAiProfiles) {
+            errors.push(`DM node ${node.id} enables AI Spintax, but no AI profile is configured.`);
+          }
           if (config.spintax_variations === "") {
             errors.push(`DM node ${node.id} needs AI variations.`);
           } else {
@@ -2480,6 +2512,9 @@ function App() {
           errors.push(`Invite node ${node.id} needs an invite link.`);
         }
         if (config.use_spintax && config.spintax_ai) {
+          if (!hasAiProfiles) {
+            errors.push(`Invite node ${node.id} enables AI Spintax, but no AI profile is configured.`);
+          }
           if (config.spintax_variations === "") {
             errors.push(`Invite node ${node.id} needs AI variations.`);
           } else {
@@ -4150,7 +4185,7 @@ function App() {
                 </>
               ) : (
                 <>
-                  {aiReadyProfiles.length === 0 && (
+                  {!hasAiProfiles && (
                     <div className="inline-warning">
                       Warmup checks are active, but no AI profile with API key is configured. Reply and Message modes
                       are locked, so only React mode can run until AI setup is completed.
@@ -4199,7 +4234,7 @@ function App() {
                             type="checkbox"
                             checked={presetForm.warmup_modes.includes("reply")}
                             onChange={() => toggleWarmupMode("reply")}
-                            disabled={aiReadyProfiles.length === 0}
+                            disabled={!hasAiProfiles}
                           />
                           Reply
                         </label>
@@ -4208,7 +4243,7 @@ function App() {
                             type="checkbox"
                             checked={presetForm.warmup_modes.includes("message")}
                             onChange={() => toggleWarmupMode("message")}
-                            disabled={aiReadyProfiles.length === 0}
+                            disabled={!hasAiProfiles}
                           />
                           Message
                         </label>
@@ -4237,7 +4272,7 @@ function App() {
                           </option>
                         ))}
                       </select>
-                      {aiReadyProfiles.length === 0 && (
+                      {!hasAiProfiles && (
                         <span className="hint">No AI profiles with keys saved. Warmup will react only.</span>
                       )}
                     </label>
@@ -4460,14 +4495,18 @@ function App() {
 	                          const inputFileValue = typeof config.input_file === "string" ? config.input_file : "";
 
 	                          const renderInputFile = () => (
-	                            <label>
-	                              CSV file
-	                              <input
-	                                type="text"
+                              <FilePathField
+                                label="CSV file"
+                                kind="csv"
+                                accept=".csv,text/csv"
+                                compact
+                                showStorageHint={false}
+                                showSavedDetails={false}
                                 value={inputFileValue}
-                                onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { input_file: e.target.value })}
+                                onChange={(next) => updateWorkflowNodeConfig(selectedNode.id, { input_file: next })}
+                                onError={handleFileImportError}
+                                onNotice={handleFileImportNotice}
                               />
-                            </label>
                           );
                           if (selectedNode.type === "session") {
                             const sessionValue = typeof config.session === "string" ? config.session : "";
@@ -4565,20 +4604,28 @@ function App() {
 	                                  />
 	                                </label>
 	                                {renderInputFile()}
-	                                <label>
-	                                  Media path
-	                                  <input
-                                    type="text"
-                                    value={config.media_path ?? ""}
-                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
-                                  />
-                                </label>
+                                <FilePathField
+                                  label="Media path"
+                                  kind="media"
+                                  compact
+                                  showStorageHint={false}
+                                  showSavedDetails={false}
+                                  value={typeof config.media_path === "string" ? config.media_path : ""}
+                                  onChange={(next) => updateWorkflowNodeConfig(selectedNode.id, { media_path: next })}
+                                  onError={handleFileImportError}
+                                  onNotice={handleFileImportNotice}
+                                />
                                 <div className="workflow-inspector-toggles">
                                   <label className="toggle">
                                     <input
                                       type="checkbox"
                                       checked={Boolean(config.use_spintax)}
-                                      onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
+                                      onChange={(e) =>
+                                        updateWorkflowNodeConfig(selectedNode.id, {
+                                          use_spintax: e.target.checked,
+                                          spintax_ai: e.target.checked && hasAiProfiles ? Boolean(config.spintax_ai) : false,
+                                        })
+                                      }
                                     />
                                     Spintax
                                   </label>
@@ -4586,8 +4633,10 @@ function App() {
                                     <input
                                       type="checkbox"
                                       checked={Boolean(config.spintax_ai)}
-                                      disabled={!config.use_spintax}
-                                      onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
+                                      disabled={!config.use_spintax || !hasAiProfiles}
+                                      onChange={(e) =>
+                                        updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked && hasAiProfiles })
+                                      }
                                     />
                                     AI Spintax
                                   </label>
@@ -4598,7 +4647,7 @@ function App() {
                                     type="number"
                                     min={2}
                                     max={12}
-                                    disabled={!config.use_spintax || !config.spintax_ai}
+                                    disabled={!config.use_spintax || !config.spintax_ai || !hasAiProfiles}
                                     value={spintaxVariationsValue}
                                     onChange={(e) =>
                                       updateWorkflowNodeConfig(selectedNode.id, {
@@ -4608,6 +4657,7 @@ function App() {
                                   />
                                 </label>
                                 <div className="helper-text">{SPINTAX_HELP}</div>
+                                {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
                                 <label>
                                   Message
                                   <textarea
@@ -4644,20 +4694,28 @@ function App() {
                                     onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { invite_url: e.target.value })}
                                   />
                                 </label>
-                                <label>
-                                  Media path
-                                  <input
-                                    type="text"
-                                    value={config.media_path ?? ""}
-                                    onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { media_path: e.target.value })}
-                                  />
-                                </label>
+                                <FilePathField
+                                  label="Media path"
+                                  kind="media"
+                                  compact
+                                  showStorageHint={false}
+                                  showSavedDetails={false}
+                                  value={typeof config.media_path === "string" ? config.media_path : ""}
+                                  onChange={(next) => updateWorkflowNodeConfig(selectedNode.id, { media_path: next })}
+                                  onError={handleFileImportError}
+                                  onNotice={handleFileImportNotice}
+                                />
                                 <div className="workflow-inspector-toggles">
                                   <label className="toggle">
                                     <input
                                       type="checkbox"
                                       checked={Boolean(config.use_spintax)}
-                                      onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { use_spintax: e.target.checked })}
+                                      onChange={(e) =>
+                                        updateWorkflowNodeConfig(selectedNode.id, {
+                                          use_spintax: e.target.checked,
+                                          spintax_ai: e.target.checked && hasAiProfiles ? Boolean(config.spintax_ai) : false,
+                                        })
+                                      }
                                     />
                                     Spintax
                                   </label>
@@ -4665,8 +4723,10 @@ function App() {
                                     <input
                                       type="checkbox"
                                       checked={Boolean(config.spintax_ai)}
-                                      disabled={!config.use_spintax}
-                                      onChange={(e) => updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked })}
+                                      disabled={!config.use_spintax || !hasAiProfiles}
+                                      onChange={(e) =>
+                                        updateWorkflowNodeConfig(selectedNode.id, { spintax_ai: e.target.checked && hasAiProfiles })
+                                      }
                                     />
                                     AI Spintax
                                   </label>
@@ -4677,7 +4737,7 @@ function App() {
                                     type="number"
                                     min={2}
                                     max={12}
-                                    disabled={!config.use_spintax || !config.spintax_ai}
+                                    disabled={!config.use_spintax || !config.spintax_ai || !hasAiProfiles}
                                     value={spintaxVariationsValue}
                                     onChange={(e) =>
                                       updateWorkflowNodeConfig(selectedNode.id, {
@@ -4687,6 +4747,7 @@ function App() {
                                   />
                                 </label>
                                 <div className="helper-text">{SPINTAX_HELP}</div>
+                                {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
                                 <label>
                                   Message
                                   <textarea
@@ -5080,7 +5141,7 @@ function App() {
                       setDmForm({
                         ...dmForm,
                         use_spintax: e.target.checked,
-                        spintax_ai: e.target.checked ? dmForm.spintax_ai : false,
+                        spintax_ai: e.target.checked && hasAiProfiles ? dmForm.spintax_ai : false,
                       })
                     }
                   />
@@ -5090,8 +5151,8 @@ function App() {
                   <input
                     type="checkbox"
                     checked={dmForm.spintax_ai}
-                    disabled={!dmForm.use_spintax}
-                    onChange={(e) => setDmForm({ ...dmForm, spintax_ai: e.target.checked })}
+                    disabled={!dmForm.use_spintax || !hasAiProfiles}
+                    onChange={(e) => setDmForm({ ...dmForm, spintax_ai: e.target.checked && hasAiProfiles })}
                   />
                   AI Spintax
                 </label>
@@ -5102,12 +5163,13 @@ function App() {
                   type="number"
                   min={2}
                   max={12}
-                  disabled={!dmForm.use_spintax || !dmForm.spintax_ai}
+                  disabled={!dmForm.use_spintax || !dmForm.spintax_ai || !hasAiProfiles}
                   value={dmForm.spintax_variations}
                   onChange={(e) => setDmForm({ ...dmForm, spintax_variations: e.target.value })}
                 />
               </label>
               <div className="helper-text">{SPINTAX_HELP}</div>
+              {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
               <button
                 className="primary"
                 onClick={() =>
@@ -5118,9 +5180,9 @@ function App() {
                       input_file: dmForm.input_file,
                       message: dmForm.message,
                       use_spintax: dmForm.use_spintax,
-                      spintax_ai: dmForm.spintax_ai,
+                      spintax_ai: hasAiProfiles ? dmForm.spintax_ai : false,
                       spintax_variations:
-                        dmForm.spintax_ai && dmForm.spintax_variations
+                        hasAiProfiles && dmForm.spintax_ai && dmForm.spintax_variations
                           ? toOptionalInt(dmForm.spintax_variations)
                           : undefined,
                       media_path: dmForm.media_path || undefined,
@@ -5196,7 +5258,7 @@ function App() {
                       setInviteForm({
                         ...inviteForm,
                         use_spintax: e.target.checked,
-                        spintax_ai: e.target.checked ? inviteForm.spintax_ai : false,
+                        spintax_ai: e.target.checked && hasAiProfiles ? inviteForm.spintax_ai : false,
                       })
                     }
                   />
@@ -5206,8 +5268,8 @@ function App() {
                   <input
                     type="checkbox"
                     checked={inviteForm.spintax_ai}
-                    disabled={!inviteForm.use_spintax}
-                    onChange={(e) => setInviteForm({ ...inviteForm, spintax_ai: e.target.checked })}
+                    disabled={!inviteForm.use_spintax || !hasAiProfiles}
+                    onChange={(e) => setInviteForm({ ...inviteForm, spintax_ai: e.target.checked && hasAiProfiles })}
                   />
                   AI Spintax
                 </label>
@@ -5218,12 +5280,13 @@ function App() {
                   type="number"
                   min={2}
                   max={12}
-                  disabled={!inviteForm.use_spintax || !inviteForm.spintax_ai}
+                  disabled={!inviteForm.use_spintax || !inviteForm.spintax_ai || !hasAiProfiles}
                   value={inviteForm.spintax_variations}
                   onChange={(e) => setInviteForm({ ...inviteForm, spintax_variations: e.target.value })}
                 />
               </label>
               <div className="helper-text">{SPINTAX_HELP}</div>
+              {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
               <button
                 className="primary"
                 onClick={() =>
@@ -5235,9 +5298,9 @@ function App() {
                       invite_url: inviteForm.invite_url,
                       message: inviteForm.message || undefined,
                       use_spintax: inviteForm.use_spintax,
-                      spintax_ai: inviteForm.spintax_ai,
+                      spintax_ai: hasAiProfiles ? inviteForm.spintax_ai : false,
                       spintax_variations:
-                        inviteForm.spintax_ai && inviteForm.spintax_variations
+                        hasAiProfiles && inviteForm.spintax_ai && inviteForm.spintax_variations
                           ? toOptionalInt(inviteForm.spintax_variations)
                           : undefined,
                       media_path: inviteForm.media_path || undefined,
@@ -5601,7 +5664,7 @@ function App() {
                       setMultiForm({
                         ...multiForm,
                         use_spintax: e.target.checked,
-                        spintax_ai: e.target.checked ? multiForm.spintax_ai : false,
+                        spintax_ai: e.target.checked && hasAiProfiles ? multiForm.spintax_ai : false,
                       })
                     }
                   />
@@ -5611,8 +5674,8 @@ function App() {
                   <input
                     type="checkbox"
                     checked={multiForm.spintax_ai}
-                    disabled={!multiForm.use_spintax}
-                    onChange={(e) => setMultiForm({ ...multiForm, spintax_ai: e.target.checked })}
+                    disabled={!multiForm.use_spintax || !hasAiProfiles}
+                    onChange={(e) => setMultiForm({ ...multiForm, spintax_ai: e.target.checked && hasAiProfiles })}
                   />
                   AI Spintax
                 </label>
@@ -5623,12 +5686,13 @@ function App() {
                   type="number"
                   min={2}
                   max={12}
-                  disabled={!multiForm.use_spintax || !multiForm.spintax_ai}
+                  disabled={!multiForm.use_spintax || !multiForm.spintax_ai || !hasAiProfiles}
                   value={multiForm.spintax_variations}
                   onChange={(e) => setMultiForm({ ...multiForm, spintax_variations: e.target.value })}
                 />
               </label>
               <div className="helper-text">{SPINTAX_HELP}</div>
+              {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
               <button
                 className="primary"
                 onClick={() => {
@@ -5640,9 +5704,9 @@ function App() {
                       input_file: multiForm.input_file,
                       message: multiForm.message,
                       use_spintax: multiForm.use_spintax,
-                      spintax_ai: multiForm.spintax_ai,
+                      spintax_ai: hasAiProfiles ? multiForm.spintax_ai : false,
                       spintax_variations:
-                        multiForm.spintax_ai && multiForm.spintax_variations
+                        hasAiProfiles && multiForm.spintax_ai && multiForm.spintax_variations
                           ? toOptionalInt(multiForm.spintax_variations)
                           : undefined,
                       media_path: multiForm.media_path || undefined,
@@ -5717,7 +5781,7 @@ function App() {
                       setMultiInviteForm({
                         ...multiInviteForm,
                         use_spintax: e.target.checked,
-                        spintax_ai: e.target.checked ? multiInviteForm.spintax_ai : false,
+                        spintax_ai: e.target.checked && hasAiProfiles ? multiInviteForm.spintax_ai : false,
                       })
                     }
                   />
@@ -5727,8 +5791,8 @@ function App() {
                   <input
                     type="checkbox"
                     checked={multiInviteForm.spintax_ai}
-                    disabled={!multiInviteForm.use_spintax}
-                    onChange={(e) => setMultiInviteForm({ ...multiInviteForm, spintax_ai: e.target.checked })}
+                    disabled={!multiInviteForm.use_spintax || !hasAiProfiles}
+                    onChange={(e) => setMultiInviteForm({ ...multiInviteForm, spintax_ai: e.target.checked && hasAiProfiles })}
                   />
                   AI Spintax
                 </label>
@@ -5739,12 +5803,13 @@ function App() {
                   type="number"
                   min={2}
                   max={12}
-                  disabled={!multiInviteForm.use_spintax || !multiInviteForm.spintax_ai}
+                  disabled={!multiInviteForm.use_spintax || !multiInviteForm.spintax_ai || !hasAiProfiles}
                   value={multiInviteForm.spintax_variations}
                   onChange={(e) => setMultiInviteForm({ ...multiInviteForm, spintax_variations: e.target.value })}
                 />
               </label>
               <div className="helper-text">{SPINTAX_HELP}</div>
+              {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
               <button
                 className="primary"
                 onClick={() => {
@@ -5757,9 +5822,9 @@ function App() {
                       invite_url: multiInviteForm.invite_url,
                       message: multiInviteForm.message || undefined,
                       use_spintax: multiInviteForm.use_spintax,
-                      spintax_ai: multiInviteForm.spintax_ai,
+                      spintax_ai: hasAiProfiles ? multiInviteForm.spintax_ai : false,
                       spintax_variations:
-                        multiInviteForm.spintax_ai && multiInviteForm.spintax_variations
+                        hasAiProfiles && multiInviteForm.spintax_ai && multiInviteForm.spintax_variations
                           ? toOptionalInt(multiInviteForm.spintax_variations)
                           : undefined,
                       media_path: multiInviteForm.media_path || undefined,
