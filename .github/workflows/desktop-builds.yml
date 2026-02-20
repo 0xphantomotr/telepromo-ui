@@ -102,9 +102,14 @@ jobs:
       - name: Build Windows backend sidecar
         shell: pwsh
         run: |
-          $backendRoot = Join-Path $env:GITHUB_WORKSPACE "telepromo\telegramGatherTool"
-          if (!(Test-Path $backendRoot)) {
-            throw "Backend root not found at $backendRoot. If backend repo is private, add TELEPROMO_REPO_TOKEN secret."
+          $backendCandidateA = Join-Path $env:GITHUB_WORKSPACE "telepromo\telegramGatherTool"
+          $backendCandidateB = Join-Path $env:GITHUB_WORKSPACE "telepromo"
+          if (Test-Path (Join-Path $backendCandidateA "scripts\build_windows_sidecar.ps1")) {
+            $backendRoot = $backendCandidateA
+          } elseif (Test-Path (Join-Path $backendCandidateB "scripts\build_windows_sidecar.ps1")) {
+            $backendRoot = $backendCandidateB
+          } else {
+            throw "Backend root not found under $backendCandidateA or $backendCandidateB. If backend repo is private, add TELEPROMO_REPO_TOKEN secret."
           }
           powershell -ExecutionPolicy Bypass -File .\scripts\prepare_windows_backend_sidecar.ps1 -BackendRoot $backendRoot
 
