@@ -30,6 +30,11 @@ export type UpdatePrepareInfo = {
   backup_dir: string;
 };
 
+export type UpdateInstallInfo = {
+  ok: boolean;
+  message: string;
+};
+
 export type UpdateFinalizeInfo = {
   checked: boolean;
   updated: boolean;
@@ -137,6 +142,12 @@ export const licensing = {
       throw new Error("Updater is only available in desktop builds.");
     }
     return (await invoke("updater_prepare", { toVersion })) as UpdatePrepareInfo;
+  },
+  async updaterInstall(downloadUrl: string, packageKind: string): Promise<UpdateInstallInfo> {
+    if (!isTauri()) {
+      throw new Error("Updater is only available in desktop builds.");
+    }
+    return (await invoke("updater_install", { downloadUrl, packageKind })) as UpdateInstallInfo;
   },
   async updaterFinalize(): Promise<UpdateFinalizeInfo> {
     if (!isTauri()) {

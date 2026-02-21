@@ -92,6 +92,12 @@ struct UpdatePrepareResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct UpdateInstallResponse {
+    ok: bool,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
 struct UpdateFinalizeResponse {
     checked: bool,
     updated: bool,
@@ -796,6 +802,58 @@ fn fetch_manifest(manifest_url: &str) -> Result<UpdateManifest, String> {
     serde_json::from_str::<UpdateManifest>(&manifest_raw).map_err(|err| format!("Invalid manifest JSON: {err}"))
 }
 
+fn validate_update_download_url(download_url: &str) -> Result<String, String> {
+    let url = download_url.trim();
+    if url.is_empty() {
+        return Err("Missing update download URL.".to_string());
+    }
+    if !url.starts_with("https://downloads.tgcampaigner.com/") {
+        return Err("Update URL is not from the trusted downloads host.".to_string());
+    }
+    Ok(url.to_string())
+}
+
+fn download_update_artifact(download_url: &str, package_kind: &str) -> Result<PathBuf, String> {
+    let url = validate_update_download_url(download_url)?;
+    let ext = match package_kind {
+        "deb" => "deb",
+        "rpm" => "rpm",
+        "appimage" => "AppImage",
+        "msi" => "msi",
+        "nsis" | "exe" => "exe",
+        _ => "bin",
+    };
+    let download_dir = std::env::temp_dir().join("tgcampaigner-updates");
+    fs::create_dir_all(&download_dir).map_err(|err| format!("Failed to create update temp dir: {err}"))?;
+    let file_name = format!(
+        "tgcampaigner-update-{}-{}.{}",
+        sanitize_label(package_kind),
+        now_unix_ts(),
+        ext
+    );
+    let output_path = download_dir.join(file_name);
+    let status = Command::new("curl")
+        .arg("-fL")
+        .arg("--retry")
+        .arg("2")
+        .arg("--connect-timeout")
+        .arg("8")
+        .arg("--max-time")
+        .arg("240")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(url)
+        .status()
+        .map_err(|err| format!("Failed to run curl for update download: {err}"))?;
+    if !status.success() {
+        return Err(format!(
+            "Failed to download update package (curl exit code {}).",
+            status.code().unwrap_or(-1)
+        ));
+    }
+    Ok(output_path)
+}
+
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     if !src.exists() {
         return Ok(());
@@ -979,6 +1037,111 @@ fn updater_prepare(app: tauri::AppHandle, to_version: String) -> Result<UpdatePr
 }
 
 #[tauri::command]
+fn updater_install(download_url: String, package_kind: String) -> Result<UpdateInstallResponse, String> {
+    let package_kind = package_kind.trim().to_ascii_lowercase();
+    if package_kind.is_empty() {
+        return Err("Missing package kind for installer.".to_string());
+    }
+    let artifact = download_update_artifact(&download_url, &package_kind)?;
+
+    #[cfg(target_os = "linux")]
+    {
+        match package_kind.as_str() {
+            "deb" => {
+                if !command_exists("pkexec") {
+                    return Err(format!(
+                        "pkexec is required for in-app .deb installs. Install manually with: sudo dpkg -i {}",
+                        artifact.to_string_lossy()
+                    ));
+                }
+                if !command_exists("dpkg") {
+                    return Err(".deb installer requires dpkg, but it is not available.".to_string());
+                }
+                let status = Command::new("pkexec")
+                    .arg("dpkg")
+                    .arg("-i")
+                    .arg(&artifact)
+                    .status()
+                    .map_err(|err| format!("Failed to start .deb installer: {err}"))?;
+                if !status.success() {
+                    return Err(format!(
+                        ".deb installer exited with code {}.",
+                        status.code().unwrap_or(-1)
+                    ));
+                }
+                return Ok(UpdateInstallResponse {
+                    ok: true,
+                    message: "Update installed. Relaunch TGCampaigner to finalize integrity checks.".to_string(),
+                });
+            }
+            "rpm" => {
+                if !command_exists("pkexec") {
+                    return Err(format!(
+                        "pkexec is required for in-app .rpm installs. Install manually with: sudo rpm -Uvh {}",
+                        artifact.to_string_lossy()
+                    ));
+                }
+                if !command_exists("rpm") {
+                    return Err(".rpm installer requires rpm, but it is not available.".to_string());
+                }
+                let status = Command::new("pkexec")
+                    .arg("rpm")
+                    .arg("-Uvh")
+                    .arg("--replacepkgs")
+                    .arg(&artifact)
+                    .status()
+                    .map_err(|err| format!("Failed to start .rpm installer: {err}"))?;
+                if !status.success() {
+                    return Err(format!(
+                        ".rpm installer exited with code {}.",
+                        status.code().unwrap_or(-1)
+                    ));
+                }
+                return Ok(UpdateInstallResponse {
+                    ok: true,
+                    message: "Update installed. Relaunch TGCampaigner to finalize integrity checks.".to_string(),
+                });
+            }
+            "appimage" => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mut perms = fs::metadata(&artifact)
+                        .map_err(|err| format!("Failed to read AppImage permissions: {err}"))?
+                        .permissions();
+                    perms.set_mode(0o755);
+                    fs::set_permissions(&artifact, perms)
+                        .map_err(|err| format!("Failed to mark AppImage executable: {err}"))?;
+                }
+                Command::new(&artifact)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .map_err(|err| format!("Failed to launch downloaded AppImage: {err}"))?;
+                return Ok(UpdateInstallResponse {
+                    ok: true,
+                    message:
+                        "Downloaded and launched the new AppImage. Close this window and continue in the new one."
+                            .to_string(),
+                });
+            }
+            _ => {
+                return Err(format!(
+                    "Automatic installer for package kind '{}' is not supported on Linux.",
+                    package_kind
+                ));
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = artifact;
+        Err("In-app package install is currently supported on Linux builds only.".to_string())
+    }
+}
+
+#[tauri::command]
 fn updater_finalize(app: tauri::AppHandle) -> Result<UpdateFinalizeResponse, String> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let mut state = read_update_state(&app);
@@ -1120,6 +1283,7 @@ pub fn run() {
             backend_restart,
             updater_check,
             updater_prepare,
+            updater_install,
             updater_finalize,
             licensing_device_public_key,
             licensing_sign,

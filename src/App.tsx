@@ -1802,15 +1802,30 @@ function App() {
     setUpdateStatusMessage("Preparing update backup and integrity checkpoint...");
     try {
       const prepared = await licensing.updaterPrepare(updateInfo.latest_version);
-      setUpdateStatusMessage(
-        `Backup created at ${prepared.backup_dir}. Opening the ${updateInfo.package_kind.toUpperCase()} package for install...`
-      );
-      await openUrl(updateInfo.download_url);
-      updateNotice(
-        "Installer opened. Complete the install, relaunch TGCampaigner, and post-update integrity will be verified automatically."
-      );
+      const packageKind = (updateInfo.package_kind || "").toLowerCase();
+      const canInstallInApp = packageKind === "appimage" || packageKind === "deb" || packageKind === "rpm";
+      if (canInstallInApp) {
+        setUpdateStatusMessage(
+          `Backup created at ${prepared.backup_dir}. Downloading and applying ${packageKind.toUpperCase()} update...`
+        );
+        const install = await licensing.updaterInstall(updateInfo.download_url, packageKind);
+        updateNotice(install.message);
+        setUpdateStatusMessage(install.message);
+      } else {
+        setUpdateStatusMessage(
+          `Backup created at ${prepared.backup_dir}. Opening the ${updateInfo.package_kind.toUpperCase()} package for install...`
+        );
+        await openUrl(updateInfo.download_url);
+        updateNotice(
+          "Installer opened. Complete the install, relaunch TGCampaigner, and post-update integrity will be verified automatically."
+        );
+      }
     } catch (err: any) {
-      setError(err?.message || "Failed to prepare update.");
+      const fallback =
+        updateInfo?.download_url
+          ? ` You can still install manually from ${updateInfo.download_url}.`
+          : "";
+      setError((err?.message || "Failed to prepare update.") + fallback);
     } finally {
       setPreparingUpdate(false);
     }
