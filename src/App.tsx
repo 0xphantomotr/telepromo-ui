@@ -1803,7 +1803,13 @@ function App() {
     try {
       const prepared = await licensing.updaterPrepare(updateInfo.latest_version);
       const packageKind = (updateInfo.package_kind || "").toLowerCase();
-      const canInstallInApp = packageKind === "appimage" || packageKind === "deb" || packageKind === "rpm";
+      const canInstallInApp =
+        packageKind === "appimage" ||
+        packageKind === "deb" ||
+        packageKind === "rpm" ||
+        packageKind === "msi" ||
+        packageKind === "exe" ||
+        packageKind === "nsis";
       if (canInstallInApp) {
         setUpdateStatusMessage(
           `Backup created at ${prepared.backup_dir}. Downloading and applying ${packageKind.toUpperCase()} update...`

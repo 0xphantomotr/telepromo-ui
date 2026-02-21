@@ -1037,12 +1037,17 @@ fn updater_prepare(app: tauri::AppHandle, to_version: String) -> Result<UpdatePr
 }
 
 #[tauri::command]
-fn updater_install(download_url: String, package_kind: String) -> Result<UpdateInstallResponse, String> {
+fn updater_install(
+    app: tauri::AppHandle,
+    download_url: String,
+    package_kind: String,
+) -> Result<UpdateInstallResponse, String> {
     let package_kind = package_kind.trim().to_ascii_lowercase();
     if package_kind.is_empty() {
         return Err("Missing package kind for installer.".to_string());
     }
     let artifact = download_update_artifact(&download_url, &package_kind)?;
+    let _ = stop_local_backend(&app);
 
     #[cfg(target_os = "linux")]
     {
@@ -1134,10 +1139,53 @@ fn updater_install(download_url: String, package_kind: String) -> Result<UpdateI
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     {
-        let _ = artifact;
-        Err("In-app package install is currently supported on Linux builds only.".to_string())
+        use std::os::windows::process::CommandExt;
+
+        if package_kind == "msi" {
+            if !command_exists("msiexec") {
+                return Err("msiexec is not available on this system.".to_string());
+            }
+            let child = Command::new("msiexec")
+                .arg("/i")
+                .arg(&artifact)
+                .creation_flags(0x08000000)
+                .spawn()
+                .map_err(|err| format!("Failed to launch MSI installer: {err}"))?;
+            return Ok(UpdateInstallResponse {
+                ok: true,
+                message: format!(
+                    "MSI installer started (PID {}). Follow the installer prompts, then relaunch TGCampaigner.",
+                    child.id()
+                ),
+            });
+        }
+
+        if package_kind == "exe" || package_kind == "nsis" {
+            let child = Command::new(&artifact)
+                .creation_flags(0x08000000)
+                .spawn()
+                .map_err(|err| format!("Failed to launch EXE installer: {err}"))?;
+            return Ok(UpdateInstallResponse {
+                ok: true,
+                message: format!(
+                    "Installer started (PID {}). Follow the installer prompts, then relaunch TGCampaigner.",
+                    child.id()
+                ),
+            });
+        }
+
+        return Err(format!(
+            "Automatic installer for package kind '{}' is not supported on Windows.",
+            package_kind
+        ));
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = (artifact, app);
+        Err("In-app package install is currently supported on Linux and Windows builds only.".to_string())
     }
 }
 
