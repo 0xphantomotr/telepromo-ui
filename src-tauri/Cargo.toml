@@ -1,6 +1,6 @@
 [package]
 name = "tauri-apptgcampaigner-ui"
-version = "0.1.6"
+version = "0.1.7"
 description = "TGCampaigner desktop app"
 authors = ["TGCampaigner"]
 license = "Proprietary"
