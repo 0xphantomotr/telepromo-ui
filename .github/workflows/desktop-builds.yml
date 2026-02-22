@@ -28,6 +28,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Checkout backend repo
+        uses: actions/checkout@v4
+        with:
+          repository: 0xphantomotr/telepromo
+          ref: main
+          path: telepromo
+          token: ${{ secrets.TELEPROMO_REPO_TOKEN || github.token }}
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -50,8 +58,29 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Build Linux backend sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          backend_candidate_a="${GITHUB_WORKSPACE}/telepromo/telegramGatherTool"
+          backend_candidate_b="${GITHUB_WORKSPACE}/telepromo"
+          if [ -x "${backend_candidate_a}/scripts/build_linux_sidecar.sh" ]; then
+            backend_root="${backend_candidate_a}"
+          elif [ -x "${backend_candidate_b}/scripts/build_linux_sidecar.sh" ]; then
+            backend_root="${backend_candidate_b}"
+          else
+            echo "Backend root not found under ${backend_candidate_a} or ${backend_candidate_b}. If backend repo is private, add TELEPROMO_REPO_TOKEN secret."
+            exit 1
+          fi
+          TGC_SKIP_LINUX_SIDECAR_PREPARE=1 ./scripts/prepare_linux_backend_sidecar.sh "${backend_root}"
+
+      - name: Verify Linux backend sidecar output
+        run: |
+          test -f src-tauri/resources/backend/tgcampaigner-backend-linux-x64
+          test -f src-tauri/resources/backend/tgcampaigner-backend-linux-x64.sha256
+
       - name: Build Tauri bundles
-        run: npm run tauri build
+        run: TGC_SKIP_LINUX_SIDECAR_PREPARE=1 npm run tauri build
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
