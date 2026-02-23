@@ -371,6 +371,30 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  gatherUsers: (payload: {
+    session: string;
+    source_ref: string;
+    mode: "members" | "discussion";
+    output_file?: string;
+    create_message_copy?: boolean;
+    user_limit?: number;
+    message_limit?: number;
+  }) =>
+    request<{
+      ok: boolean;
+      session: string;
+      mode: "members" | "discussion";
+      source_ref: string;
+      resolved_target: string;
+      users_found: number;
+      messages_scanned?: number | null;
+      output_file: string;
+      output_message_file?: string | null;
+      linked_discussion_used?: boolean;
+    }>("/tools/gather-users", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   uploadFile: (kind: "csv" | "media" | "photo", file: File) => {
     const params = new URLSearchParams({
       kind,

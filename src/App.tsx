@@ -206,6 +206,28 @@ type TelegramApiSetupStatus = {
   api_hash_set: boolean;
 };
 
+type GatherUsersForm = {
+  session: string;
+  source_ref: string;
+  mode: "members" | "discussion";
+  output_file: string;
+  create_message_copy: boolean;
+  user_limit: string;
+  message_limit: string;
+};
+
+type GatherUsersResult = {
+  session: string;
+  mode: "members" | "discussion";
+  source_ref: string;
+  resolved_target: string;
+  users_found: number;
+  messages_scanned?: number | null;
+  output_file: string;
+  output_message_file?: string | null;
+  linked_discussion_used?: boolean;
+};
+
 
 type WorkflowNode = {
   id: string;
@@ -325,6 +347,17 @@ const defaultTelegramApiSetupForm: TelegramApiSetupForm = {
   api_hash: "",
 };
 
+const defaultGatherUsersForm: GatherUsersForm = {
+  session: "",
+  source_ref: "",
+  mode: "members",
+  output_file: "gather/group_members.csv",
+  create_message_copy: true,
+  user_limit: "",
+  message_limit: "5000",
+};
+
+const TELEGRAM_API_PORTAL_URL = "https://my.telegram.org/apps";
 const TELEGRAM_API_MISSING_MESSAGE =
   "Telegram API credentials are missing. Open Sessions -> API Setup and save API_ID + API_HASH.";
 
@@ -1208,6 +1241,9 @@ function App() {
   const [importDir, setImportDir] = useState("");
   const [mergeFiles, setMergeFiles] = useState("");
   const [mergeOutput, setMergeOutput] = useState("merged.csv");
+  const [gatherUsersForm, setGatherUsersForm] = useState<GatherUsersForm>(defaultGatherUsersForm);
+  const [gatherUsersResult, setGatherUsersResult] = useState<GatherUsersResult | null>(null);
+  const [gatheringUsers, setGatheringUsers] = useState(false);
   const [createSessionForm, setCreateSessionForm] = useState({
     name: "",
     phone: "",
@@ -1938,6 +1974,7 @@ function App() {
     setProfileForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setWarmupForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setProxyForm((prev) => (prev.session ? prev : { ...prev, session: first }));
+    setGatherUsersForm((prev) => (prev.session ? prev : { ...prev, session: first }));
     setDeleteSession((prev) => prev || first);
     setRenameSession((prev) => (prev.old_name ? prev : { ...prev, old_name: first }));
     setManagedSession((prev) => prev || first);
@@ -3029,6 +3066,59 @@ function App() {
     }
   };
 
+  const handleGatherUsers = async () => {
+    setError(null);
+    setNotice(null);
+    const session = gatherUsersForm.session.trim();
+    const sourceRef = gatherUsersForm.source_ref.trim();
+    const outputFile = gatherUsersForm.output_file.trim();
+    if (!session) {
+      setError("Select a session for gathering users.");
+      return;
+    }
+    if (!sourceRef) {
+      setError("Enter a group/channel username, link, or chat id.");
+      return;
+    }
+    setGatheringUsers(true);
+    try {
+      const res = await api.gatherUsers({
+        session,
+        source_ref: sourceRef,
+        mode: gatherUsersForm.mode,
+        output_file: outputFile || undefined,
+        create_message_copy: gatherUsersForm.create_message_copy,
+        user_limit: gatherUsersForm.user_limit ? toInt(gatherUsersForm.user_limit, 0) : 0,
+        message_limit:
+          gatherUsersForm.mode === "discussion" && gatherUsersForm.message_limit
+            ? toInt(gatherUsersForm.message_limit, 0)
+            : 0,
+      });
+      setGatherUsersResult({
+        session: res.session,
+        mode: res.mode,
+        source_ref: res.source_ref,
+        resolved_target: res.resolved_target,
+        users_found: res.users_found,
+        messages_scanned: res.messages_scanned,
+        output_file: res.output_file,
+        output_message_file: res.output_message_file,
+        linked_discussion_used: res.linked_discussion_used,
+      });
+      setGatherUsersForm((prev) => ({
+        ...prev,
+        output_file: res.output_file || prev.output_file,
+      }));
+      updateNotice(
+        `Gathered ${res.users_found} users from ${res.resolved_target}. CSV saved at ${res.output_file}.`
+      );
+    } catch (err: any) {
+      setError(err.message || "Failed to gather users");
+    } finally {
+      setGatheringUsers(false);
+    }
+  };
+
   const parseTargets = (value: string) =>
     value
       .split(/[,\n;]/)
@@ -3065,6 +3155,7 @@ function App() {
     const next = name.trim();
     if (!next) return;
     setManagedSession(next);
+    setGatherUsersForm((prev) => ({ ...prev, session: next }));
   };
 
   const selectManagedSession = (name: string) => {
@@ -3074,6 +3165,7 @@ function App() {
     setRenameSession((prev) => ({ ...prev, old_name: next }));
     setDeleteSession(next);
     setProxyForm((prev) => ({ ...prev, session: next }));
+    setGatherUsersForm((prev) => ({ ...prev, session: next }));
   };
 
   const toggleMultiSession = (name: string) => {
@@ -3127,6 +3219,7 @@ function App() {
   const sessionNavItems = [
     { id: "sessions-main", label: "Session management" },
     { id: "sessions-tools", label: "Config and Tools" },
+    { id: "sessions-gather", label: "Gather users" },
     { id: "sessions-api", label: "API Setup" },
   ];
   const multiNavItems = [
@@ -3474,7 +3567,16 @@ function App() {
               )}
               {warning && (
                 <div key={`warning-${warning}`} className="alert-item alert-warning">
-                  <span>{warning}</span>
+                  {warning === TELEGRAM_API_MISSING_MESSAGE ? (
+                    <span>
+                      {warning}{" "}
+                      <a href={TELEGRAM_API_PORTAL_URL} target="_blank" rel="noreferrer noopener">
+                        Create API credentials
+                      </a>
+                    </span>
+                  ) : (
+                    <span>{warning}</span>
+                  )}
                   <span className="alert-progress" />
                 </div>
               )}
@@ -4056,6 +4158,150 @@ function App() {
                 )}
               </div>
             </div>
+          </div>
+          )}
+
+          {sessionsPanel === "sessions-gather" && (
+          <div className="panel" id="sessions-gather">
+            <div className="panel-header">
+              <h3>Gather Users</h3>
+              <span className="hint">Export usernames from members or discussion activity</span>
+            </div>
+            <p className="helper-text">
+              Members mode reads group/channel participants. Discussion mode scans message authors and can auto-use a
+              linked discussion group when a broadcast channel is provided.
+            </p>
+            <div className="form-grid">
+              <label>
+                Session
+                <SessionSelect
+                  value={gatherUsersForm.session}
+                  options={sessionViews}
+                  onChange={(next) => {
+                    setGatherUsersForm((prev) => ({ ...prev, session: next }));
+                    setManagedSession(next);
+                  }}
+                />
+              </label>
+              <label>
+                Gather mode
+                <select
+                  value={gatherUsersForm.mode}
+                  onChange={(e) =>
+                    setGatherUsersForm((prev) => ({
+                      ...prev,
+                      mode: e.target.value as "members" | "discussion",
+                    }))
+                  }
+                >
+                  <option value="members">Group members</option>
+                  <option value="discussion">Discussion users (message authors)</option>
+                </select>
+              </label>
+              <label>
+                Group/channel
+                <input
+                  type="text"
+                  value={gatherUsersForm.source_ref}
+                  onChange={(e) =>
+                    setGatherUsersForm((prev) => ({ ...prev, source_ref: e.target.value }))
+                  }
+                  placeholder="@mygroup or https://t.me/mygroup"
+                />
+              </label>
+              <label>
+                Output CSV path
+                <input
+                  type="text"
+                  value={gatherUsersForm.output_file}
+                  onChange={(e) =>
+                    setGatherUsersForm((prev) => ({ ...prev, output_file: e.target.value }))
+                  }
+                  placeholder="gather/mygroup_members.csv"
+                />
+              </label>
+              <div className="row">
+                <label>
+                  Max users (optional)
+                  <input
+                    type="number"
+                    min={0}
+                    value={gatherUsersForm.user_limit}
+                    onChange={(e) =>
+                      setGatherUsersForm((prev) => ({ ...prev, user_limit: e.target.value }))
+                    }
+                    placeholder="0 = no limit"
+                  />
+                </label>
+                <label>
+                  {gatherUsersForm.mode === "discussion" ? "Max messages to scan (optional)" : "Max messages to scan"}
+                  <input
+                    type="number"
+                    min={0}
+                    value={gatherUsersForm.message_limit}
+                    onChange={(e) =>
+                      setGatherUsersForm((prev) => ({ ...prev, message_limit: e.target.value }))
+                    }
+                    placeholder="0 = no limit"
+                    disabled={gatherUsersForm.mode !== "discussion"}
+                  />
+                </label>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={gatherUsersForm.create_message_copy}
+                  onChange={(e) =>
+                    setGatherUsersForm((prev) => ({
+                      ...prev,
+                      create_message_copy: e.target.checked,
+                    }))
+                  }
+                />
+                Also create <code>_message.csv</code> duplicate for campaign inputs
+              </label>
+              <div className="row">
+                <button className="primary" onClick={handleGatherUsers} disabled={gatheringUsers}>
+                  {gatheringUsers ? "Gathering..." : "Gather users"}
+                </button>
+                {gatherUsersResult && (
+                  <button
+                    className="ghost"
+                    onClick={() =>
+                      setGatherUsersForm((prev) => ({
+                        ...prev,
+                        output_file: gatherUsersResult.output_file || prev.output_file,
+                      }))
+                    }
+                  >
+                    Keep latest output path
+                  </button>
+                )}
+              </div>
+            </div>
+            {gatherUsersResult && (
+              <div className="notice" style={{ marginTop: "12px" }}>
+                <strong>{gatherUsersResult.users_found} users gathered</strong>
+                <div className="helper-text" style={{ marginTop: "8px" }}>
+                  Target: <code>{gatherUsersResult.resolved_target}</code>
+                  {gatherUsersResult.linked_discussion_used ? " (linked discussion used)" : ""}
+                </div>
+                {gatherUsersResult.messages_scanned !== null &&
+                  gatherUsersResult.messages_scanned !== undefined && (
+                    <div className="helper-text">
+                      Messages scanned: <code>{gatherUsersResult.messages_scanned}</code>
+                    </div>
+                  )}
+                <div className="helper-text">
+                  CSV: <code>{gatherUsersResult.output_file}</code>
+                </div>
+                {gatherUsersResult.output_message_file && (
+                  <div className="helper-text">
+                    Message copy: <code>{gatherUsersResult.output_message_file}</code>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           )}
         </div>
