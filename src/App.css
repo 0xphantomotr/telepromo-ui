@@ -698,6 +698,13 @@ textarea {
   display: block;
 }
 
+.alert-item a {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .alert-success {
   color: var(--success);
   border-color: rgba(61, 220, 151, 0.35);
