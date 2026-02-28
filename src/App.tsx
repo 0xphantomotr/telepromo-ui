@@ -1,9 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type CSSProperties,
+} from "react";
 import "./App.css";
 import { api } from "./lib/api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { LICENSE_API_BASE, decodeTokenPayload, isTauri, licensing, type UpdateCheckInfo } from "./lib/license";
 import { FilePathField } from "./components/FilePathField";
+import { ReadinessChecklist, SectionCard, StatusBadge, TooltipInfo, type ReadinessItem } from "./components/UxPrimitives";
 
 const POLL_INTERVAL_MS = 6000;
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -38,6 +47,15 @@ const WORKFLOW_NODE_ICONS: Record<string, string> = {
   forward: "/forward.svg",
   wait: "/wait.svg",
   warmup: "/warmup.svg",
+};
+const WORKFLOW_NODE_LABELS: Record<string, string> = {
+  session: "Session",
+  wait: "Wait",
+  dm: "DM",
+  invite: "Invite",
+  bulk_add: "Bulk add",
+  forward: "Forward",
+  warmup: "Warmup",
 };
 const SPINTAX_HELP =
   "Spintax picks a random option inside {a|b}. Example: Hey {friend|there}! AI Spintax auto-generates variations using your default AI profile.";
@@ -405,6 +423,7 @@ const buildTargeting = (form: CommonOptions) => ({
 });
 
 const normalizeText = (value: string) => value.trim().toLowerCase();
+const hasText = (value?: string | null) => Boolean(value && value.trim());
 
 const sessionMatchesQuery = (session: SessionItem, query: string) => {
   const q = normalizeText(query);
@@ -1095,6 +1114,276 @@ function App() {
     () => Boolean(workflowDraft.meta?.running),
     [workflowDraft.meta]
   );
+  const workflowActionNodeCount = useMemo(
+    () => workflowDraft.nodes.filter((node) => ["dm", "invite", "bulk_add", "forward", "warmup"].includes(node.type)).length,
+    [workflowDraft.nodes]
+  );
+  const workflowValidationErrors = useMemo(() => {
+    const errors: string[] = [];
+    const sessionNodes = workflowDraft.nodes.filter((node) => node.type === "session");
+    if (sessionNodes.length === 0) {
+      errors.push("Add a Session node to start the workflow.");
+    }
+    if (sessionNodes.length > 1) {
+      errors.push("Only one Session node is allowed in a humanistic loop.");
+    }
+    sessionNodes.forEach((node) => {
+      const config = node.config as Record<string, any>;
+      const session = typeof config.session === "string" ? config.session.trim() : "";
+      if (!session) {
+        errors.push(`Session node ${node.id} needs a session selected.`);
+      }
+      const loopCount = Number(config.loop_count ?? 1);
+      if (!Number.isFinite(loopCount) || loopCount < 1) {
+        errors.push(`Session node ${node.id} needs a valid loop count.`);
+      }
+    });
+    if (sessionNodes.length === 1) {
+      const sessionId = sessionNodes[0].id;
+      const outgoing = workflowDraft.edges.filter((edge) => edge.source === sessionId);
+      if (outgoing.length === 0) {
+        errors.push("Session node must link to the first action.");
+      } else if (outgoing.length > 1) {
+        errors.push("Session node cannot have multiple outgoing links.");
+      }
+    }
+
+    const waitNodes = workflowDraft.nodes.filter((node) => node.type === "wait");
+    waitNodes.forEach((node) => {
+      const config = node.config as Record<string, any>;
+      if (config.min_seconds === "" || config.max_seconds === "") {
+        errors.push(`Wait node ${node.id} needs min/max seconds.`);
+        return;
+      }
+      const minSeconds = Number(config.min_seconds ?? 600);
+      const maxSeconds = Number(config.max_seconds ?? 900);
+      if (!Number.isFinite(minSeconds) || minSeconds < 0) {
+        errors.push(`Wait node ${node.id} needs a valid min seconds value.`);
+      }
+      if (!Number.isFinite(maxSeconds) || maxSeconds < 0) {
+        errors.push(`Wait node ${node.id} needs a valid max seconds value.`);
+      }
+      if (Number.isFinite(minSeconds) && Number.isFinite(maxSeconds) && minSeconds > maxSeconds) {
+        errors.push(`Wait node ${node.id} min seconds must be <= max seconds.`);
+      }
+    });
+
+    const actionTypes = new Set(["dm", "invite", "bulk_add", "forward", "warmup"]);
+    const actionNodes = workflowDraft.nodes.filter((node) => actionTypes.has(node.type));
+    if (actionNodes.length === 0) {
+      errors.push("Add at least one action node (DM, Invite, Bulk Add, Forward, Warmup).");
+    }
+    actionNodes.forEach((node) => {
+      const config = node.config as Record<string, any>;
+      const presetName = typeof config.preset_name === "string" ? config.preset_name.trim() : "";
+      if (!presetName) {
+        errors.push(`Action node ${node.id} (${node.type}) needs a preset.`);
+      }
+      const inputFile = typeof config.input_file === "string" ? config.input_file.trim() : "";
+      if (node.type !== "warmup" && !inputFile) {
+        errors.push(`Action node ${node.id} (${node.type}) needs a CSV file.`);
+      }
+      if (node.type === "dm") {
+        const message = typeof config.message === "string" ? config.message.trim() : "";
+        if (!message) {
+          errors.push(`DM node ${node.id} needs a message.`);
+        }
+        if (config.use_spintax && config.spintax_ai) {
+          if (!hasAiProfiles) {
+            errors.push(`DM node ${node.id} enables AI Spintax, but no AI profile is configured.`);
+          }
+          if (config.spintax_variations === "") {
+            errors.push(`DM node ${node.id} needs AI variations.`);
+          } else {
+            const variations = Number(config.spintax_variations ?? 5);
+            if (!Number.isFinite(variations) || variations < 2 || variations > 12) {
+              errors.push(`DM node ${node.id} AI variations must be between 2 and 12.`);
+            }
+          }
+        }
+      }
+      if (node.type === "invite") {
+        const invite = typeof config.invite_url === "string" ? config.invite_url.trim() : "";
+        if (!invite) {
+          errors.push(`Invite node ${node.id} needs an invite link.`);
+        }
+        if (config.use_spintax && config.spintax_ai) {
+          if (!hasAiProfiles) {
+            errors.push(`Invite node ${node.id} enables AI Spintax, but no AI profile is configured.`);
+          }
+          if (config.spintax_variations === "") {
+            errors.push(`Invite node ${node.id} needs AI variations.`);
+          } else {
+            const variations = Number(config.spintax_variations ?? 5);
+            if (!Number.isFinite(variations) || variations < 2 || variations > 12) {
+              errors.push(`Invite node ${node.id} AI variations must be between 2 and 12.`);
+            }
+          }
+        }
+      }
+      if (node.type === "bulk_add") {
+        const targetRef = typeof config.target_ref === "string" ? config.target_ref.trim() : "";
+        if (!targetRef) {
+          errors.push(`Bulk add node ${node.id} needs a target group/channel.`);
+        }
+      }
+      if (node.type === "forward") {
+        const messageLink = typeof config.message_link === "string" ? config.message_link.trim() : "";
+        const sourcePeer = typeof config.source_peer === "string" ? config.source_peer.trim() : "";
+        const messageId = config.message_id ? String(config.message_id).trim() : "";
+        if (!messageLink && !(sourcePeer && messageId)) {
+          errors.push(`Forward node ${node.id} needs a message link or source + message id.`);
+        }
+      }
+      if (node.type === "warmup") {
+        const targets = typeof config.targets === "string" ? config.targets.trim() : "";
+        if (!targets) {
+          errors.push(`Warmup node ${node.id} needs targets.`);
+        }
+      }
+    });
+
+    return errors;
+  }, [hasAiProfiles, workflowDraft.edges, workflowDraft.nodes]);
+  const workflowReadinessItems = useMemo<ReadinessItem[]>(
+    () => [
+      {
+        label: "Loop id set",
+        ready: hasText(workflowDraft.id),
+        detail: workflowDraft.id || "Set the id before saving or starting the loop.",
+      },
+      {
+        label: "Loop name set",
+        ready: hasText(workflowDraft.name),
+        detail: workflowDraft.name || "Use a readable name so saved loops stay easy to scan.",
+      },
+      {
+        label: "Session anchor added",
+        ready: workflowHasSession,
+        detail: workflowHasSession ? "A Session node is on the canvas." : "Add exactly one Session node first.",
+      },
+      {
+        label: "Action path present",
+        ready: workflowActionNodeCount > 0,
+        detail:
+          workflowActionNodeCount > 0
+            ? `${workflowActionNodeCount} action node${workflowActionNodeCount === 1 ? "" : "s"} configured.`
+            : "Add at least one action node after the Session node.",
+      },
+      {
+        label: "Validation clean",
+        ready: workflowValidationErrors.length === 0,
+        detail: workflowValidationErrors[0] || "All required node configuration is in place.",
+      },
+    ],
+    [workflowActionNodeCount, workflowDraft.id, workflowDraft.name, workflowHasSession, workflowValidationErrors]
+  );
+  const selectedNodeReadinessItems = useMemo<ReadinessItem[]>(() => {
+    if (!selectedNode) return [];
+    const config = selectedNode.config as Record<string, any>;
+    const presetValue = typeof config.preset_name === "string" ? config.preset_name.trim() : "";
+    const inputFileValue = typeof config.input_file === "string" ? config.input_file.trim() : "";
+    if (selectedNode.type === "session") {
+      const sessionValue = typeof config.session === "string" ? config.session.trim() : "";
+      const loopCount = Number(config.loop_count ?? 1);
+      return [
+        { label: "Session selected", ready: hasText(sessionValue), detail: sessionValue || "Choose the account that starts the loop." },
+        {
+          label: "Loop count valid",
+          ready: Number.isFinite(loopCount) && loopCount >= 1,
+          detail: Number.isFinite(loopCount) && loopCount >= 1 ? `${loopCount} pass${loopCount === 1 ? "" : "es"} per run.` : "Set loop count to 1 or more.",
+        },
+      ];
+    }
+    if (selectedNode.type === "wait") {
+      const minSeconds = Number(config.min_seconds ?? 600);
+      const maxSeconds = Number(config.max_seconds ?? 900);
+      return [
+        {
+          label: "Min seconds valid",
+          ready: Number.isFinite(minSeconds) && minSeconds >= 0,
+          detail: Number.isFinite(minSeconds) ? `${minSeconds}s` : "Set a minimum wait time.",
+        },
+        {
+          label: "Max seconds valid",
+          ready: Number.isFinite(maxSeconds) && maxSeconds >= 0 && maxSeconds >= minSeconds,
+          detail:
+            Number.isFinite(maxSeconds) && maxSeconds >= minSeconds
+              ? `${maxSeconds}s`
+              : "Max must be greater than or equal to min seconds.",
+        },
+      ];
+    }
+    if (selectedNode.type === "dm") {
+      return [
+        { label: "Preset selected", ready: hasText(presetValue), detail: presetValue || "Choose the DM preset that controls pacing." },
+        { label: "CSV loaded", ready: hasText(inputFileValue), detail: inputFileValue || "Attach the CSV with target users." },
+        {
+          label: "Message ready",
+          ready: hasText(typeof config.message === "string" ? config.message : ""),
+          detail: hasText(typeof config.message === "string" ? config.message : "") ? "Message body is set." : "Add the DM text to send.",
+        },
+      ];
+    }
+    if (selectedNode.type === "invite") {
+      return [
+        { label: "Preset selected", ready: hasText(presetValue), detail: presetValue || "Choose the invite preset." },
+        { label: "CSV loaded", ready: hasText(inputFileValue), detail: inputFileValue || "Attach the CSV with targets." },
+        {
+          label: "Invite link set",
+          ready: hasText(typeof config.invite_url === "string" ? config.invite_url : ""),
+          detail:
+            (typeof config.invite_url === "string" && config.invite_url.trim()) ||
+            "Add the Telegram invite URL that should be promoted.",
+        },
+      ];
+    }
+    if (selectedNode.type === "bulk_add") {
+      return [
+        { label: "Preset selected", ready: hasText(presetValue), detail: presetValue || "Choose the preset that controls add pacing." },
+        { label: "CSV loaded", ready: hasText(inputFileValue), detail: inputFileValue || "Attach the CSV with users to add." },
+        {
+          label: "Target group set",
+          ready: hasText(typeof config.target_ref === "string" ? config.target_ref : ""),
+          detail:
+            (typeof config.target_ref === "string" && config.target_ref.trim()) ||
+            "Use @groupusername or a numeric group id.",
+        },
+      ];
+    }
+    if (selectedNode.type === "forward") {
+      const hasMessageLink = hasText(typeof config.message_link === "string" ? config.message_link : "");
+      const hasSource = hasText(typeof config.source_peer === "string" ? config.source_peer : "");
+      const hasMessageId = hasText(config.message_id ? String(config.message_id) : "");
+      return [
+        { label: "Preset selected", ready: hasText(presetValue), detail: presetValue || "Choose the preset that controls pacing." },
+        { label: "CSV loaded", ready: hasText(inputFileValue), detail: inputFileValue || "Attach the CSV with users." },
+        {
+          label: "Message source set",
+          ready: hasMessageLink || (hasSource && hasMessageId),
+          detail:
+            (typeof config.message_link === "string" && config.message_link.trim()) ||
+            ((typeof config.source_peer === "string" && config.source_peer.trim()) && config.message_id
+              ? `${config.source_peer} / ${config.message_id}`
+              : "Provide a Telegram message link or source peer + message id."),
+        },
+      ];
+    }
+    if (selectedNode.type === "warmup") {
+      return [
+        { label: "Preset selected", ready: hasText(presetValue), detail: presetValue || "Choose the warmup preset." },
+        {
+          label: "Targets set",
+          ready: hasText(typeof config.targets === "string" ? config.targets : ""),
+          detail:
+            (typeof config.targets === "string" && config.targets.trim()) ||
+            "Enter group usernames separated by commas or new lines.",
+        },
+      ];
+    }
+    return [];
+  }, [selectedNode]);
+  const selectedNodeReady = selectedNodeReadinessItems.length > 0 && selectedNodeReadinessItems.every((item) => item.ready);
 
   const getEdgePoints = (
     sourcePos: { x: number; y: number },
@@ -2480,133 +2769,7 @@ function App() {
     setCanvasOffset({ x: nextOffsetX, y: nextOffsetY });
   };
 
-	  const validateWorkflow = () => {
-	    const errors: string[] = [];
-	    const sessionNodes = workflowDraft.nodes.filter((node) => node.type === "session");
-	    if (sessionNodes.length === 0) {
-	      errors.push("Add a Session node to start the workflow.");
-	    }
-	    if (sessionNodes.length > 1) {
-	      errors.push("Only one Session node is allowed in a humanistic loop.");
-	    }
-	    sessionNodes.forEach((node) => {
-	      const config = node.config as Record<string, any>;
-	      const session = typeof config.session === "string" ? config.session.trim() : "";
-	      if (!session) {
-	        errors.push(`Session node ${node.id} needs a session selected.`);
-	      }
-	      const loopCount = Number(config.loop_count ?? 1);
-	      if (!Number.isFinite(loopCount) || loopCount < 1) {
-	        errors.push(`Session node ${node.id} needs a valid loop count.`);
-	      }
-	    });
-	    if (sessionNodes.length === 1) {
-	      const sessionId = sessionNodes[0].id;
-	      const outgoing = workflowDraft.edges.filter((edge) => edge.source === sessionId);
-	      if (outgoing.length === 0) {
-	        errors.push("Session node must link to the first action.");
-	      } else if (outgoing.length > 1) {
-	        errors.push("Session node cannot have multiple outgoing links.");
-	      }
-	    }
-
-	    const waitNodes = workflowDraft.nodes.filter((node) => node.type === "wait");
-	    waitNodes.forEach((node) => {
-	      const config = node.config as Record<string, any>;
-	      if (config.min_seconds === "" || config.max_seconds === "") {
-        errors.push(`Wait node ${node.id} needs min/max seconds.`);
-        return;
-      }
-      const minSeconds = Number(config.min_seconds ?? 600);
-      const maxSeconds = Number(config.max_seconds ?? 900);
-      if (!Number.isFinite(minSeconds) || minSeconds < 0) {
-        errors.push(`Wait node ${node.id} needs a valid min seconds value.`);
-      }
-      if (!Number.isFinite(maxSeconds) || maxSeconds < 0) {
-        errors.push(`Wait node ${node.id} needs a valid max seconds value.`);
-      }
-      if (Number.isFinite(minSeconds) && Number.isFinite(maxSeconds) && minSeconds > maxSeconds) {
-        errors.push(`Wait node ${node.id} min seconds must be <= max seconds.`);
-      }
-    });
-
-    const actionTypes = new Set(["dm", "invite", "bulk_add", "forward", "warmup"]);
-    const actionNodes = workflowDraft.nodes.filter((node) => actionTypes.has(node.type));
-    if (actionNodes.length === 0) {
-      errors.push("Add at least one action node (DM, Invite, Bulk Add, Forward, Warmup).");
-    }
-    actionNodes.forEach((node) => {
-      const config = node.config as Record<string, any>;
-      const presetName = typeof config.preset_name === "string" ? config.preset_name.trim() : "";
-      if (!presetName) {
-        errors.push(`Action node ${node.id} (${node.type}) needs a preset.`);
-      }
-      const inputFile = typeof config.input_file === "string" ? config.input_file.trim() : "";
-      if (node.type !== "warmup" && !inputFile) {
-        errors.push(`Action node ${node.id} (${node.type}) needs a CSV file.`);
-      }
-      if (node.type === "dm") {
-        const message = typeof config.message === "string" ? config.message.trim() : "";
-        if (!message) {
-          errors.push(`DM node ${node.id} needs a message.`);
-        }
-        if (config.use_spintax && config.spintax_ai) {
-          if (!hasAiProfiles) {
-            errors.push(`DM node ${node.id} enables AI Spintax, but no AI profile is configured.`);
-          }
-          if (config.spintax_variations === "") {
-            errors.push(`DM node ${node.id} needs AI variations.`);
-          } else {
-            const variations = Number(config.spintax_variations ?? 5);
-            if (!Number.isFinite(variations) || variations < 2 || variations > 12) {
-              errors.push(`DM node ${node.id} AI variations must be between 2 and 12.`);
-            }
-          }
-        }
-      }
-      if (node.type === "invite") {
-        const invite = typeof config.invite_url === "string" ? config.invite_url.trim() : "";
-        if (!invite) {
-          errors.push(`Invite node ${node.id} needs an invite link.`);
-        }
-        if (config.use_spintax && config.spintax_ai) {
-          if (!hasAiProfiles) {
-            errors.push(`Invite node ${node.id} enables AI Spintax, but no AI profile is configured.`);
-          }
-          if (config.spintax_variations === "") {
-            errors.push(`Invite node ${node.id} needs AI variations.`);
-          } else {
-            const variations = Number(config.spintax_variations ?? 5);
-            if (!Number.isFinite(variations) || variations < 2 || variations > 12) {
-              errors.push(`Invite node ${node.id} AI variations must be between 2 and 12.`);
-            }
-          }
-        }
-      }
-      if (node.type === "bulk_add") {
-        const targetRef = typeof config.target_ref === "string" ? config.target_ref.trim() : "";
-        if (!targetRef) {
-          errors.push(`Bulk add node ${node.id} needs a target group/channel.`);
-        }
-      }
-      if (node.type === "forward") {
-        const messageLink = typeof config.message_link === "string" ? config.message_link.trim() : "";
-        const sourcePeer = typeof config.source_peer === "string" ? config.source_peer.trim() : "";
-        const messageId = config.message_id ? String(config.message_id).trim() : "";
-        if (!messageLink && !(sourcePeer && messageId)) {
-          errors.push(`Forward node ${node.id} needs a message link or source + message id.`);
-        }
-      }
-      if (node.type === "warmup") {
-        const targets = typeof config.targets === "string" ? config.targets.trim() : "";
-        if (!targets) {
-          errors.push(`Warmup node ${node.id} needs targets.`);
-        }
-      }
-    });
-
-    return errors;
-  };
+  const validateWorkflow = () => workflowValidationErrors;
 
 	  const handleWorkflowStart = async () => {
 	    setError(null);
@@ -3204,6 +3367,86 @@ function App() {
   };
 
   const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Workspace";
+  const openExternalLink = useCallback(async (url: string) => {
+    try {
+      await openUrl(url);
+    } catch {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  }, []);
+
+  const sessionsStatusItems = [
+    { label: "Telegram API", tone: telegramApiSetup.configured ? "ok" : "warn", text: telegramApiSetup.configured ? "Configured" : "Needs setup" },
+    { label: "Sessions", tone: sessionViews.length > 0 ? "ok" : "warn", text: `${sessionViews.length} available` },
+    { label: "Backend", tone: error?.includes("Cannot reach local backend") ? "danger" : "ok", text: error?.includes("Cannot reach local backend") ? "Disconnected" : "Connected" },
+  ] as const;
+
+  const singleReadinessItems: ReadinessItem[] = (() => {
+    switch (singlePanel) {
+      case "dm":
+        return [
+          { label: "Session selected", ready: hasText(dmForm.session), detail: dmForm.session || "Choose the account that will send messages." },
+          { label: "CSV loaded", ready: hasText(dmForm.input_file), detail: dmForm.input_file || "Import or paste a CSV path with targets." },
+          { label: "Message ready", ready: hasText(dmForm.message), detail: hasText(dmForm.message) ? "Message body set." : "Add the DM text to send." },
+          {
+            label: "AI Spintax ready",
+            ready: !dmForm.spintax_ai || hasAiProfiles,
+            detail: dmForm.spintax_ai ? (hasAiProfiles ? "AI profile available." : "Create an AI profile first.") : "Optional.",
+          },
+        ];
+      case "invite":
+        return [
+          { label: "Session selected", ready: hasText(inviteForm.session), detail: inviteForm.session || "Choose the account that will send the invite DM." },
+          { label: "CSV loaded", ready: hasText(inviteForm.input_file), detail: inviteForm.input_file || "Import or paste a CSV path with targets." },
+          { label: "Invite URL set", ready: hasText(inviteForm.invite_url), detail: inviteForm.invite_url || "Add the group or channel invite URL." },
+          {
+            label: "AI Spintax ready",
+            ready: !inviteForm.spintax_ai || hasAiProfiles,
+            detail: inviteForm.spintax_ai ? (hasAiProfiles ? "AI profile available." : "Create an AI profile first.") : "Optional.",
+          },
+        ];
+      case "bulk_add":
+        return [
+          { label: "Session selected", ready: hasText(bulkAddForm.session), detail: bulkAddForm.session || "Choose the account that will add members." },
+          { label: "CSV loaded", ready: hasText(bulkAddForm.input_file), detail: bulkAddForm.input_file || "Import or paste a CSV path with users." },
+          { label: "Target group set", ready: hasText(bulkAddForm.target_ref), detail: bulkAddForm.target_ref || "Add the destination group @username or id." },
+        ];
+      case "forward":
+        return [
+          { label: "Session selected", ready: hasText(forwardForm.session), detail: forwardForm.session || "Choose the account that will forward the message." },
+          { label: "CSV loaded", ready: hasText(forwardForm.input_file), detail: forwardForm.input_file || "Import or paste a CSV path with users." },
+          {
+            label: "Source message identified",
+            ready: hasText(forwardForm.message_link) || hasText(forwardForm.source_peer) || hasText(forwardForm.message_id),
+            detail:
+              forwardForm.message_link ||
+              (hasText(forwardForm.source_peer) && hasText(forwardForm.message_id)
+                ? `${forwardForm.source_peer} • #${forwardForm.message_id}`
+                : "Provide a message link or source peer + message ID."),
+          },
+        ];
+      case "profile":
+        return [
+          { label: "Session selected", ready: hasText(profileForm.session), detail: profileForm.session || "Choose the account to update." },
+          {
+            label: "Profile changes prepared",
+            ready: [profileForm.first_name, profileForm.last_name, profileForm.bio, profileForm.photo].some(hasText),
+            detail: [profileForm.first_name, profileForm.last_name, profileForm.bio, profileForm.photo].some(hasText)
+              ? "At least one field will be updated."
+              : "Fill at least one field or choose a photo.",
+          },
+        ];
+      case "warmup":
+        return [
+          { label: "Session selected", ready: hasText(warmupForm.session), detail: warmupForm.session || "Choose the account that will warm up." },
+          { label: "Targets listed", ready: parseTargets(warmupForm.targets).length > 0, detail: parseTargets(warmupForm.targets).length > 0 ? `${parseTargets(warmupForm.targets).length} targets ready.` : "Add group usernames separated by commas." },
+          { label: "Warmup preset selected", ready: hasText(warmupForm.preset_name), detail: warmupForm.preset_name || "Choose the preset that controls the warmup mode." },
+        ];
+      default:
+        return [];
+    }
+  })();
+  const singleReady = singleReadinessItems.every((item) => item.ready);
   const singleNavItems = [
     { id: "dm", label: "Direct Message" },
     { id: "invite", label: "Invite Link DM" },
@@ -3723,6 +3966,19 @@ function App() {
             Refresh
           </button>
         </div>
+        <div className="section-lead">
+          <p>
+            Set up Telegram API credentials once, keep session data organized, and use the tools here to import,
+            gather, and maintain accounts without leaving the app.
+          </p>
+          <div className="status-badge-row">
+            {sessionsStatusItems.map((item) => (
+              <StatusBadge key={item.label} tone={item.tone}>
+                {item.label}: {item.text}
+              </StatusBadge>
+            ))}
+          </div>
+        </div>
           <div className="panel-grid">
           {(sessionsPanel === "sessions-main" || !sessionsPanel) && (
           <div className="panel" id="sessions-main">
@@ -3747,133 +4003,197 @@ function App() {
               <span className="hint">Create, rename, delete, import</span>
             </div>
             <div className="form-grid">
-              <label>
-                Create new session
-                <div className="row">
-                  <input
-                    type="text"
-                    value={createSessionForm.name}
-                    onChange={(e) =>
-                      setCreateSessionForm((prev) => ({
-                        ...prev,
-                        name: e.target.value,
-                      }))
-                    }
-                    placeholder="session_name"
-                  />
-                  <input
-                    type="text"
-                    value={createSessionForm.phone}
-                    onChange={(e) =>
-                      setCreateSessionForm((prev) => ({
-                        ...prev,
-                        phone: e.target.value,
-                      }))
-                    }
-                    placeholder="+15551234567"
-                  />
-                  <button className="primary" onClick={handleCreateSessionStart}>
-                    Send code
-                  </button>
-                </div>
-              </label>
-
-              {createSessionForm.login_id && (
-                <label>
-                  Verify session sign-in
-                  <div className="row">
-                    {!createSessionForm.need_password && (
-                      <input
-                        type="text"
-                        value={createSessionForm.code}
-                        onChange={(e) =>
-                          setCreateSessionForm((prev) => ({
-                            ...prev,
-                            code: e.target.value,
-                          }))
-                        }
-                        placeholder="Telegram code"
-                      />
-                    )}
+              <SectionCard
+                title="Create a new session"
+                description="Start login with a session name and phone number, then finish verification when Telegram sends the code."
+                titleHelp={
+                  <TooltipInfo wide>
+                    The session name is the local account label used across TGCampaigner. Use a stable name so you can
+                    recognize it later in Single, Multi, and Gather users.
+                  </TooltipInfo>
+                }
+                status={<StatusBadge tone={createSessionForm.login_id ? "warn" : "neutral"}>{createSessionForm.login_id ? "Verification pending" : "Ready"}</StatusBadge>}
+              >
+                <div className="form-grid">
+                  <label>
+                    <span className="label-text">
+                      Session name
+                      <TooltipInfo>Local label for this Telegram account inside the app.</TooltipInfo>
+                    </span>
                     <input
-                      type="password"
-                      value={createSessionForm.password}
+                      type="text"
+                      value={createSessionForm.name}
                       onChange={(e) =>
                         setCreateSessionForm((prev) => ({
                           ...prev,
-                          password: e.target.value,
+                          name: e.target.value,
                         }))
                       }
-                      placeholder={
-                        createSessionForm.need_password
-                          ? "2FA password (required)"
-                          : "2FA password (if enabled)"
-                      }
+                      placeholder="session_name"
                     />
-                    <button className="primary" onClick={handleCreateSessionFinish}>
-                      Verify
-                    </button>
-                    <button className="ghost" onClick={handleCreateSessionCancel}>
-                      Cancel
+                  </label>
+                  <label>
+                    <span className="label-text">
+                      Phone number
+                      <TooltipInfo>Use the Telegram account phone number in international format.</TooltipInfo>
+                    </span>
+                    <div className="row">
+                      <input
+                        type="text"
+                        value={createSessionForm.phone}
+                        onChange={(e) =>
+                          setCreateSessionForm((prev) => ({
+                            ...prev,
+                            phone: e.target.value,
+                          }))
+                        }
+                        placeholder="+15551234567"
+                      />
+                      <button className="primary" onClick={handleCreateSessionStart}>
+                        Send code
+                      </button>
+                    </div>
+                  </label>
+                  {createSessionForm.login_id && (
+                    <div className="inline-warning">
+                      Telegram sign-in is in progress. Enter the login code below, and add the 2FA password only if the
+                      account has it enabled.
+                    </div>
+                  )}
+                  {createSessionForm.login_id && (
+                    <div className="row">
+                      {!createSessionForm.need_password && (
+                        <label>
+                          <span className="label-text">
+                            Telegram code
+                            <TooltipInfo>Paste the code Telegram sent to the account.</TooltipInfo>
+                          </span>
+                          <input
+                            type="text"
+                            value={createSessionForm.code}
+                            onChange={(e) =>
+                              setCreateSessionForm((prev) => ({
+                                ...prev,
+                                code: e.target.value,
+                              }))
+                            }
+                            placeholder="Telegram code"
+                          />
+                        </label>
+                      )}
+                      <label>
+                        <span className="label-text">
+                          2FA password
+                          <TooltipInfo>Optional unless Telegram asks for the account password.</TooltipInfo>
+                        </span>
+                        <input
+                          type="password"
+                          value={createSessionForm.password}
+                          onChange={(e) =>
+                            setCreateSessionForm((prev) => ({
+                              ...prev,
+                              password: e.target.value,
+                            }))
+                          }
+                          placeholder={
+                            createSessionForm.need_password
+                              ? "2FA password (required)"
+                              : "2FA password (if enabled)"
+                          }
+                        />
+                      </label>
+                    </div>
+                  )}
+                  {createSessionForm.login_id && (
+                    <div className="row">
+                      <button className="primary" onClick={handleCreateSessionFinish}>
+                        Verify
+                      </button>
+                      <button className="ghost" onClick={handleCreateSessionCancel}>
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Maintain existing sessions"
+                description="Rename local labels, remove stale accounts, or swap to another session before running jobs."
+                status={<StatusBadge tone={managedSession ? "ok" : "neutral"}>{managedSession || "No session selected"}</StatusBadge>}
+              >
+                <div className="form-grid two-up-grid">
+                  <label>
+                    <span className="label-text">
+                      Rename session
+                      <TooltipInfo>Only the local session label changes. It does not rename the Telegram account itself.</TooltipInfo>
+                    </span>
+                    <SessionSelect
+                      value={renameSession.old_name}
+                      options={sessionViews}
+                      onChange={(next) => {
+                        setRenameSession((prev) => ({ ...prev, old_name: next }));
+                        setManagedSession(next);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    New label
+                    <input
+                      type="text"
+                      value={renameSession.new_name}
+                      onChange={(e) => setRenameSession((prev) => ({ ...prev, new_name: e.target.value }))}
+                      placeholder="new_session_name"
+                    />
+                  </label>
+                </div>
+                <div className="row">
+                  <button className="primary" onClick={handleRename}>
+                    Rename
+                  </button>
+                </div>
+                <div className="divider" />
+                <label>
+                  <span className="label-text">
+                    Delete session
+                    <TooltipInfo wide>Deletes the local session data for the selected account. Stop any running jobs first.</TooltipInfo>
+                  </span>
+                  <div className="row">
+                    <SessionSelect
+                      value={deleteSession}
+                      options={sessionViews}
+                      onChange={(next) => {
+                        setDeleteSession(next);
+                        setManagedSession(next);
+                      }}
+                    />
+                    <button className="danger" onClick={handleDelete}>
+                      Delete
                     </button>
                   </div>
                 </label>
-              )}
+              </SectionCard>
 
-              <label>
-                Rename session
-                <div className="row">
-                  <SessionSelect
-                    value={renameSession.old_name}
-                    options={sessionViews}
-                    onChange={(next) => {
-                      setRenameSession((prev) => ({ ...prev, old_name: next }));
-                      setManagedSession(next);
-                    }}
-                  />
-                  <input
-                    type="text"
-                    value={renameSession.new_name}
-                    onChange={(e) => setRenameSession((prev) => ({ ...prev, new_name: e.target.value }))}
-                    placeholder="new_session_name"
-                  />
-                </div>
-              </label>
-              <button className="primary" onClick={handleRename}>
-                Rename
-              </button>
-
-              <label>
-                Delete session
-                <div className="row">
-                  <SessionSelect
-                    value={deleteSession}
-                    options={sessionViews}
-                    onChange={(next) => {
-                      setDeleteSession(next);
-                      setManagedSession(next);
-                    }}
-                  />
-                  <button className="danger" onClick={handleDelete}>
-                    Delete
-                  </button>
-                </div>
-              </label>
-
-              <label>
-                Import sessions (folder path)
-                <div className="row">
-                  <input
-                    type="text"
-                    value={importDir}
-                    onChange={(e) => setImportDir(e.target.value)}
-                    placeholder="/path/to/sessions"
-                  />
-                  <button className="ghost" onClick={handleImport}>
-                    Import
-                  </button>
-                </div>
-              </label>
+              <SectionCard
+                title="Import session folder"
+                description="Bring in an existing sessions directory from another machine or previous install."
+                titleHelp={<TooltipInfo wide>Import expects a folder path on the local backend machine. Use this to migrate previously saved sessions.</TooltipInfo>}
+              >
+                <label>
+                  Folder path
+                  <div className="row">
+                    <input
+                      type="text"
+                      value={importDir}
+                      onChange={(e) => setImportDir(e.target.value)}
+                      placeholder="/path/to/sessions"
+                    />
+                    <button className="ghost" onClick={handleImport}>
+                      Import
+                    </button>
+                  </div>
+                </label>
+              </SectionCard>
             </div>
           </div>
           )}
@@ -3884,45 +4204,80 @@ function App() {
               <h3>Telegram API Setup</h3>
               <span className="hint">{telegramApiSetup.configured ? "Configured" : "Required for sessions"}</span>
             </div>
-            <p className="helper-text">
-              Add your Telegram developer credentials from my.telegram.org. These are required to create or sign in sessions.
-              The app stores them in the local backend environment file and restarts the local backend automatically.
-            </p>
-            <div className="form-grid">
-              <label>
-                API_ID
-                <input
-                  type="text"
-                  value={telegramApiSetupForm.api_id}
-                  onChange={(e) =>
-                    setTelegramApiSetupForm((prev) => ({ ...prev, api_id: e.target.value }))
-                  }
-                  placeholder="12345678"
-                />
-              </label>
-              <label>
-                API_HASH
-                <input
-                  type="password"
-                  value={telegramApiSetupForm.api_hash}
-                  onChange={(e) =>
-                    setTelegramApiSetupForm((prev) => ({ ...prev, api_hash: e.target.value }))
-                  }
-                  placeholder={
-                    telegramApiSetup.api_hash_set
-                      ? "Stored (enter new value to rotate)"
-                      : "32-character hex value"
-                  }
-                />
-              </label>
-              <div className="row">
-                <button className="primary" onClick={handleSaveTelegramApiSetup} disabled={savingTelegramApiSetup}>
-                  {savingTelegramApiSetup ? "Saving..." : "Save API credentials"}
-                </button>
-                <button className="ghost" onClick={() => loadTelegramApiSetup()}>
-                  Reload
-                </button>
+            <div className="section-lead compact">
+              <p>
+                These credentials come from your Telegram developer account and are required before you can create or
+                sign in sessions.
+              </p>
+              <div className="status-badge-row">
+                <StatusBadge tone={telegramApiSetup.configured ? "ok" : "warn"}>
+                  {telegramApiSetup.configured ? "Credentials saved" : "Credentials missing"}
+                </StatusBadge>
+                <StatusBadge tone={telegramApiSetup.api_hash_set ? "ok" : "neutral"}>
+                  {telegramApiSetup.api_hash_set ? "API hash stored" : "API hash not stored"}
+                </StatusBadge>
               </div>
+            </div>
+            <div className="form-grid">
+              <SectionCard
+                title="Developer credentials"
+                description="The app stores these locally in the backend environment file and restarts the backend automatically after saving."
+                titleHelp={
+                  <TooltipInfo wide>
+                    Create your Telegram application at my.telegram.org/apps, then copy the API ID and API hash into
+                    the fields below.
+                  </TooltipInfo>
+                }
+                status={<StatusBadge tone={telegramApiSetup.configured ? "ok" : "warn"}>{telegramApiSetup.configured ? "Configured" : "Setup required"}</StatusBadge>}
+              >
+                <div className="row">
+                  <button className="ghost" onClick={() => openExternalLink(TELEGRAM_API_PORTAL_URL)}>
+                    Open my.telegram.org/apps
+                  </button>
+                  <button className="ghost" onClick={() => loadTelegramApiSetup()}>
+                    Reload saved values
+                  </button>
+                </div>
+                <div className="form-grid two-up-grid">
+                  <label>
+                    <span className="label-text">
+                      API_ID
+                      <TooltipInfo>Numeric application id from Telegram.</TooltipInfo>
+                    </span>
+                    <input
+                      type="text"
+                      value={telegramApiSetupForm.api_id}
+                      onChange={(e) =>
+                        setTelegramApiSetupForm((prev) => ({ ...prev, api_id: e.target.value }))
+                      }
+                      placeholder="12345678"
+                    />
+                  </label>
+                  <label>
+                    <span className="label-text">
+                      API_HASH
+                      <TooltipInfo>32-character Telegram application hash. Stored locally after save.</TooltipInfo>
+                    </span>
+                    <input
+                      type="password"
+                      value={telegramApiSetupForm.api_hash}
+                      onChange={(e) =>
+                        setTelegramApiSetupForm((prev) => ({ ...prev, api_hash: e.target.value }))
+                      }
+                      placeholder={
+                        telegramApiSetup.api_hash_set
+                          ? "Stored (enter new value to rotate)"
+                          : "32-character hex value"
+                      }
+                    />
+                  </label>
+                </div>
+                <div className="row">
+                  <button className="primary" onClick={handleSaveTelegramApiSetup} disabled={savingTelegramApiSetup}>
+                    {savingTelegramApiSetup ? "Saving..." : "Save API credentials"}
+                  </button>
+                </div>
+              </SectionCard>
             </div>
           </div>
           )}
@@ -4167,99 +4522,142 @@ function App() {
               <h3>Gather Users</h3>
               <span className="hint">Export usernames from members or discussion activity</span>
             </div>
-            <p className="helper-text">
-              Members mode reads group/channel participants. Discussion mode scans message authors and can auto-use a
-              linked discussion group when a broadcast channel is provided.
-            </p>
             <div className="form-grid">
-              <label>
-                Session
-                <SessionSelect
-                  value={gatherUsersForm.session}
-                  options={sessionViews}
-                  onChange={(next) => {
-                    setGatherUsersForm((prev) => ({ ...prev, session: next }));
-                    setManagedSession(next);
-                  }}
-                />
-              </label>
-              <label>
-                Gather mode
-                <select
-                  value={gatherUsersForm.mode}
-                  onChange={(e) =>
-                    setGatherUsersForm((prev) => ({
-                      ...prev,
-                      mode: e.target.value as "members" | "discussion",
-                    }))
-                  }
-                >
-                  <option value="members">Group members</option>
-                  <option value="discussion">Discussion users (message authors)</option>
-                </select>
-              </label>
-              <label>
-                Group/channel
-                <input
-                  type="text"
-                  value={gatherUsersForm.source_ref}
-                  onChange={(e) =>
-                    setGatherUsersForm((prev) => ({ ...prev, source_ref: e.target.value }))
-                  }
-                  placeholder="@mygroup or https://t.me/mygroup"
-                />
-              </label>
-              <label>
-                Output CSV path
-                <input
-                  type="text"
-                  value={gatherUsersForm.output_file}
-                  onChange={(e) =>
-                    setGatherUsersForm((prev) => ({ ...prev, output_file: e.target.value }))
-                  }
-                  placeholder="gather/mygroup_members.csv"
-                />
-              </label>
-              <div className="row">
+              <SectionCard
+                title="Source and mode"
+                description="Members mode reads participants directly. Discussion mode scans message authors and can auto-use a linked discussion group for broadcast channels."
+                titleHelp={<TooltipInfo wide>Use this when you need a campaign-ready CSV from a group, channel, or linked discussion.</TooltipInfo>}
+              >
+                <div className="form-grid two-up-grid">
+                  <label>
+                    <span className="label-text">
+                      Session
+                      <TooltipInfo>Account used to read the target group or channel.</TooltipInfo>
+                    </span>
+                    <SessionSelect
+                      value={gatherUsersForm.session}
+                      options={sessionViews}
+                      onChange={(next) => {
+                        setGatherUsersForm((prev) => ({ ...prev, session: next }));
+                        setManagedSession(next);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    <span className="label-text">
+                      Gather mode
+                      <TooltipInfo>Choose whether to read current members or active discussion authors.</TooltipInfo>
+                    </span>
+                    <select
+                      value={gatherUsersForm.mode}
+                      onChange={(e) =>
+                        setGatherUsersForm((prev) => ({
+                          ...prev,
+                          mode: e.target.value as "members" | "discussion",
+                        }))
+                      }
+                    >
+                      <option value="members">Group members</option>
+                      <option value="discussion">Discussion users (message authors)</option>
+                    </select>
+                  </label>
+                </div>
                 <label>
-                  Max users (optional)
+                  <span className="label-text">
+                    Group or channel
+                    <TooltipInfo>Accepts @username, t.me link, or internal id.</TooltipInfo>
+                  </span>
                   <input
-                    type="number"
-                    min={0}
-                    value={gatherUsersForm.user_limit}
+                    type="text"
+                    value={gatherUsersForm.source_ref}
                     onChange={(e) =>
-                      setGatherUsersForm((prev) => ({ ...prev, user_limit: e.target.value }))
+                      setGatherUsersForm((prev) => ({ ...prev, source_ref: e.target.value }))
                     }
-                    placeholder="0 = no limit"
+                    placeholder="@mygroup or https://t.me/mygroup"
                   />
                 </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Output"
+                description="Choose where the CSV will be written and whether to create a duplicate message-ready file."
+                status={<StatusBadge tone={gatherUsersResult ? "ok" : "neutral"}>{gatherUsersResult ? "Last run saved" : "No output yet"}</StatusBadge>}
+              >
                 <label>
-                  {gatherUsersForm.mode === "discussion" ? "Max messages to scan (optional)" : "Max messages to scan"}
+                  Output CSV path
                   <input
-                    type="number"
-                    min={0}
-                    value={gatherUsersForm.message_limit}
+                    type="text"
+                    value={gatherUsersForm.output_file}
                     onChange={(e) =>
-                      setGatherUsersForm((prev) => ({ ...prev, message_limit: e.target.value }))
+                      setGatherUsersForm((prev) => ({ ...prev, output_file: e.target.value }))
                     }
-                    placeholder="0 = no limit"
-                    disabled={gatherUsersForm.mode !== "discussion"}
+                    placeholder="gather/mygroup_members.csv"
                   />
                 </label>
-              </div>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={gatherUsersForm.create_message_copy}
-                  onChange={(e) =>
-                    setGatherUsersForm((prev) => ({
-                      ...prev,
-                      create_message_copy: e.target.checked,
-                    }))
-                  }
-                />
-                Also create <code>_message.csv</code> duplicate for campaign inputs
-              </label>
+                <div className="row">
+                  <label>
+                    Max users (optional)
+                    <input
+                      type="number"
+                      min={0}
+                      value={gatherUsersForm.user_limit}
+                      onChange={(e) =>
+                        setGatherUsersForm((prev) => ({ ...prev, user_limit: e.target.value }))
+                      }
+                      placeholder="0 = no limit"
+                    />
+                  </label>
+                  <label>
+                    {gatherUsersForm.mode === "discussion" ? "Max messages to scan (optional)" : "Max messages to scan"}
+                    <input
+                      type="number"
+                      min={0}
+                      value={gatherUsersForm.message_limit}
+                      onChange={(e) =>
+                        setGatherUsersForm((prev) => ({ ...prev, message_limit: e.target.value }))
+                      }
+                      placeholder="0 = no limit"
+                      disabled={gatherUsersForm.mode !== "discussion"}
+                    />
+                  </label>
+                </div>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={gatherUsersForm.create_message_copy}
+                    onChange={(e) =>
+                      setGatherUsersForm((prev) => ({
+                        ...prev,
+                        create_message_copy: e.target.checked,
+                      }))
+                    }
+                  />
+                  Also create <code>_message.csv</code> duplicate for campaign inputs
+                </label>
+              </SectionCard>
+
+              <ReadinessChecklist
+                title="Gather readiness"
+                description="Quick check before exporting."
+                items={[
+                  {
+                    label: "Session selected",
+                    ready: hasText(gatherUsersForm.session),
+                    detail: gatherUsersForm.session || "Choose the account that can read the target.",
+                  },
+                  {
+                    label: "Target source set",
+                    ready: hasText(gatherUsersForm.source_ref),
+                    detail: gatherUsersForm.source_ref || "Add the group or channel reference.",
+                  },
+                  {
+                    label: "Output path set",
+                    ready: hasText(gatherUsersForm.output_file),
+                    detail: gatherUsersForm.output_file || "Pick the CSV path inside the backend data folder.",
+                  },
+                ]}
+              />
+
               <div className="row">
                 <button className="primary" onClick={handleGatherUsers} disabled={gatheringUsers}>
                   {gatheringUsers ? "Gathering..." : "Gather users"}
@@ -4668,18 +5066,58 @@ function App() {
       
       {showWorkflows && (
         <section className="workflow-section">
+          <div className="section-header">
+            <h2>Humanistic loops</h2>
+            <span className="hint">Build session-driven workflows visually</span>
+          </div>
+          <div className="section-lead">
+            <p>
+              Start with one Session node, then connect waits and actions. The canvas stays flexible, but the sidebar
+              now keeps the critical setup, validation, and saved loops easier to scan.
+            </p>
+          </div>
+          <div className="status-badge-row">
+            <StatusBadge tone={workflowRunning ? "ok" : "neutral"}>
+              {workflowRunning ? "Loop running" : "Idle"}
+            </StatusBadge>
+            <StatusBadge tone={workflowHasSession ? "ok" : "warn"}>
+              {workflowHasSession ? "Session anchor ready" : "Session node required"}
+            </StatusBadge>
+            <StatusBadge tone={workflowActionNodeCount > 0 ? "ok" : "warn"}>
+              {workflowActionNodeCount > 0
+                ? `${workflowActionNodeCount} action node${workflowActionNodeCount === 1 ? "" : "s"}`
+                : "No action nodes"}
+            </StatusBadge>
+            <StatusBadge tone={workflowValidationErrors.length === 0 ? "ok" : "warn"}>
+              {workflowValidationErrors.length === 0 ? "Validation clean" : `${workflowValidationErrors.length} issue${workflowValidationErrors.length === 1 ? "" : "s"}`}
+            </StatusBadge>
+          </div>
+          <ReadinessChecklist
+            title="Loop readiness"
+            description="Before starting, make sure the loop has an id, a readable name, one Session node, and at least one valid action path."
+            items={workflowReadinessItems}
+          />
           <div className="workflow-layout">
             <div className="panel workflow-canvas-panel">
               <div className="panel-header workflow-header">
                 <div>
-                  <h3>Humanistic loop</h3>
+                  <div className="section-card-title-row">
+                    <h3>Loop workspace</h3>
+                    <TooltipInfo wide>
+                      One Session node controls the sending account. Connect waits and action nodes from left to right
+                      to model the path you want the operator to run.
+                    </TooltipInfo>
+                  </div>
                   <span className="hint">
                     {workflowDraft.nodes.length} nodes • {workflowDraft.edges.length} edges
                   </span>
                 </div>
                 <div className="workflow-toolbar">
                   <label>
-                    Loop id
+                    <span className="label-text">
+                      Loop id
+                      <TooltipInfo wide>Used when saving and starting the loop. Once a Session node exists, keep the id stable.</TooltipInfo>
+                    </span>
                     <input
                       type="text"
                       value={workflowDraft.id}
@@ -4688,7 +5126,10 @@ function App() {
                     />
                   </label>
                   <label>
-                    Name
+                    <span className="label-text">
+                      Name
+                      <TooltipInfo>Readable label shown in the saved loops list.</TooltipInfo>
+                    </span>
                     <input
                       type="text"
                       value={workflowDraft.name}
@@ -4713,6 +5154,16 @@ function App() {
               </div>
               <div className="workflow-canvas-wrap">
                 <div className="workflow-blocks-panel">
+                  <div className="workflow-blocks-header">
+                    <div>
+                      <h4>Add nodes</h4>
+                      <p>Start with Session, then add waits or actions.</p>
+                    </div>
+                    <TooltipInfo wide>
+                      Session is the anchor node. Until it exists, the action blocks stay disabled so the flow cannot be
+                      misconfigured from the start.
+                    </TooltipInfo>
+                  </div>
                   <div className="workflow-blocks">
                     {[
                       { type: "session", label: "Session", disabled: workflowHasSession },
@@ -4729,7 +5180,8 @@ function App() {
                           key={block.type}
                           className="workflow-block-btn"
                           disabled={block.disabled}
-                        aria-label={block.label}
+                          aria-label={block.label}
+                          title={block.disabled ? "Add a Session node first." : `Add ${block.label} node`}
                           onClick={() => addWorkflowNode(block.type)}
                         >
                           {iconSrc ? <img className="workflow-block-icon" src={iconSrc} alt="" aria-hidden="true" /> : null}
@@ -4741,22 +5193,55 @@ function App() {
                 </div>
 
                 <div className="workflow-sidebar-overlay">
-                  {selectedNode && (
-                    <div className="workflow-overlay-panel">
-                      <div className="panel-header">
-                        <h3>Inspector</h3>
-                        <span className="hint">Configure selected node</span>
-                      </div>
-                      <div className="form-grid">
-                        <label>
-                          Node id
-                          <input type="text" value={selectedNode.id} disabled />
-                        </label>
-                        <label>
-                          Type
-                          <input type="text" value={selectedNode.type} disabled />
-                        </label>
-                        {(() => {
+                  <div className="workflow-overlay-stack">
+                    {selectedNode ? (
+                      <div className="workflow-overlay-panel">
+                        <div className="panel-header">
+                          <div>
+                            <h3>Inspector</h3>
+                            <span className="hint">{WORKFLOW_NODE_LABELS[selectedNode.type] || selectedNode.type}</span>
+                          </div>
+                          <StatusBadge tone={selectedNodeReady ? "ok" : "warn"}>
+                            {selectedNodeReady ? "Node ready" : "Needs setup"}
+                          </StatusBadge>
+                        </div>
+                        <div className="workflow-overlay-scroll">
+                          <SectionCard
+                            dense
+                            title="Selected node"
+                            description="Node id stays stable for saved loops. Type is fixed after the node is added."
+                            status={<StatusBadge tone="neutral">{selectedNode.id}</StatusBadge>}
+                          >
+                            <div className="form-grid">
+                              <label>
+                                Node id
+                                <input type="text" value={selectedNode.id} disabled />
+                              </label>
+                              <label>
+                                Type
+                                <input type="text" value={WORKFLOW_NODE_LABELS[selectedNode.type] || selectedNode.type} disabled />
+                              </label>
+                            </div>
+                          </SectionCard>
+                          {selectedNodeReadinessItems.length > 0 ? (
+                            <ReadinessChecklist
+                              title="Node readiness"
+                              description="Finish the required fields for this node before linking it into the final path."
+                              items={selectedNodeReadinessItems}
+                            />
+                          ) : null}
+                          <SectionCard
+                            dense
+                            title="Configuration"
+                            titleHelp={
+                              <TooltipInfo wide>
+                                Keep only the required inputs filled. Optional fields can stay blank unless the node
+                                specifically needs them for your workflow.
+                              </TooltipInfo>
+                            }
+                          >
+                            <div className="form-grid">
+                              {(() => {
 	                          const config = selectedNode.config as Record<string, any>;
 	                          const presetValue = typeof config.preset_name === "string" ? config.preset_name : "";
 	                          const inputFileValue = typeof config.input_file === "string" ? config.input_file : "";
@@ -5129,54 +5614,76 @@ function App() {
                           }
                           return null;
                         })()}
+                            </div>
+                          </SectionCard>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="workflow-overlay-panel">
+                        <SectionCard
+                          dense
+                          title="Inspector"
+                          description="Select any node on the canvas to configure its inputs, options, and run requirements."
+                          status={<StatusBadge tone="neutral">No node selected</StatusBadge>}
+                        >
+                          <p className="helper-text">
+                            Use the toolbar on the left to add nodes. Click a node to inspect it, drag it to reposition,
+                            and use the chain icon to create or remove links.
+                          </p>
+                        </SectionCard>
+                      </div>
+                    )}
+
+                    <div className="workflow-overlay-panel">
+                      <div className="panel-header">
+                        <div>
+                          <h3>Saved loops</h3>
+                          <span className="hint">
+                            {workflowQuery
+                              ? `${filteredWorkflows.length} shown • ${workflows.length} total`
+                              : `${workflows.length} total`}
+                          </span>
+                        </div>
+                        <StatusBadge tone={workflows.length > 0 ? "ok" : "neutral"}>
+                          {workflows.length > 0 ? "Library ready" : "No saved loops"}
+                        </StatusBadge>
+                      </div>
+                      <div className="session-browser">
+                        <div className="session-browser-controls">
+                          <input
+                            type="text"
+                            value={workflowQuery}
+                            onChange={(e) => setWorkflowQuery(e.target.value)}
+                            placeholder="Search loops..."
+                          />
+                        </div>
+                        <div className="session-list session-list-scroll" style={{ maxHeight: 320 }}>
+                          {workflows.length === 0 && <p className="muted">No loops saved yet.</p>}
+                          {workflows.length > 0 && filteredWorkflows.length === 0 && (
+                            <p className="muted">No loops match that search.</p>
+                          )}
+                          {filteredWorkflows.map((workflow) => (
+                            <div key={workflow.id} className="session-card">
+                              <div>
+                                <h4>{workflow.name}</h4>
+                                <p className="meta">
+                                  {workflow.id} • {workflow.nodes?.length ?? 0} nodes
+                                </p>
+                              </div>
+                              <div className="row">
+                                <button className="ghost" onClick={() => handleWorkflowLoad(workflow)}>
+                                  Load
+                                </button>
+                                <button className="danger" onClick={() => handleWorkflowDelete(workflow.id)}>
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  )}
-
-	                  <div className="workflow-overlay-panel">
-	                    <div className="panel-header">
-	                      <h3>Saved loops</h3>
-	                      <span className="hint">
-	                        {workflowQuery
-	                          ? `${filteredWorkflows.length} shown • ${workflows.length} total`
-	                          : `${workflows.length} total`}
-	                      </span>
-	                    </div>
-	                    <div className="session-browser">
-	                      <div className="session-browser-controls">
-	                        <input
-	                          type="text"
-	                          value={workflowQuery}
-	                          onChange={(e) => setWorkflowQuery(e.target.value)}
-	                          placeholder="Search loops..."
-	                        />
-	                      </div>
-	                      <div className="session-list session-list-scroll" style={{ maxHeight: 320 }}>
-	                        {workflows.length === 0 && <p className="muted">No loops saved yet.</p>}
-	                        {workflows.length > 0 && filteredWorkflows.length === 0 && (
-	                          <p className="muted">No loops match that search.</p>
-	                        )}
-	                        {filteredWorkflows.map((workflow) => (
-	                          <div key={workflow.id} className="session-card">
-	                            <div>
-	                              <h4>{workflow.name}</h4>
-	                              <p className="meta">
-	                                {workflow.id} • {workflow.nodes?.length ?? 0} nodes
-	                              </p>
-	                            </div>
-	                            <div className="row">
-	                              <button className="ghost" onClick={() => handleWorkflowLoad(workflow)}>
-	                                Load
-	                              </button>
-	                              <button className="danger" onClick={() => handleWorkflowDelete(workflow.id)}>
-	                                Delete
-	                              </button>
-	                            </div>
-	                          </div>
-	                        ))}
-	                      </div>
-	                    </div>
-	                  </div>
+                  </div>
                 </div>
 
                 <div
@@ -5344,6 +5851,12 @@ function App() {
           <h2>Single-Account Campaigns</h2>
           <span className="hint">Pick a campaign type and run it fast</span>
         </div>
+        <div className="section-lead">
+          <p>
+            Each campaign follows the same pattern: choose the sending session, prepare inputs, review readiness, then
+            run. Optional settings stay visible but no longer compete with the primary path.
+          </p>
+        </div>
         <div className="panel-grid single-layout">
           <div className="panel single-session-panel">
             <div className="panel-header">
@@ -5352,9 +5865,28 @@ function App() {
             </div>
             <div className="form-grid">
               <label>
-                Active session
+                <span className="label-text">
+                  Active session
+                  <TooltipInfo>All actions in this panel run through this single account.</TooltipInfo>
+                </span>
                 <SessionSelect value={singleSession} options={sessionViews} onChange={setSingleSession} />
               </label>
+              <div className="status-badge-row">
+                <StatusBadge tone={singleSession ? "ok" : "warn"}>
+                  {singleSession ? "Session selected" : "Select a session"}
+                </StatusBadge>
+                <StatusBadge tone={presetOptions.length > 0 ? "ok" : "neutral"}>
+                  {presetOptions.length} DM presets
+                </StatusBadge>
+                <StatusBadge tone={warmupPresets.length > 0 ? "ok" : "neutral"}>
+                  {warmupPresets.length} warmup presets
+                </StatusBadge>
+              </div>
+              <ReadinessChecklist
+                title="Current run readiness"
+                description="This updates as you switch between Single campaign types."
+                items={singleReadinessItems}
+              />
             </div>
           </div>
           {singlePanel === "dm" && (
@@ -5363,104 +5895,138 @@ function App() {
               <h3>Direct Message</h3>
               <span className="hint">CSV → DM</span>
             </div>
-	            <div className="form-grid">
-	              <label>
-	                Preset
-	                <PresetSelect
-	                  value={dmForm.preset_name}
-	                  options={presetOptions}
-	                  placeholder="Select preset"
-	                  searchPlaceholder="Search DM presets..."
-	                  onChange={(next) => setDmForm({ ...dmForm, preset_name: next })}
-	                />
-	              </label>
-              <FilePathField
-                label="CSV file"
-                kind="csv"
-                accept=".csv,text/csv"
-                value={dmForm.input_file}
-                onChange={(next) => setDmForm({ ...dmForm, input_file: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-              <label>
-                Message
-                <textarea
-                  value={dmForm.message}
-                  onChange={(e) => setDmForm({ ...dmForm, message: e.target.value })}
-                  rows={3}
-                />
-              </label>
-              <FilePathField
-                label="Media path (optional)"
-                kind="media"
-                value={dmForm.media_path}
-                onChange={(next) => setDmForm({ ...dmForm, media_path: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-              <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={dmForm.use_spintax}
-                    onChange={(e) =>
-                      setDmForm({
-                        ...dmForm,
-                        use_spintax: e.target.checked,
-                        spintax_ai: e.target.checked && hasAiProfiles ? dmForm.spintax_ai : false,
-                      })
-                    }
-                  />
-                  Spintax
-                </label>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={dmForm.spintax_ai}
-                    disabled={!dmForm.use_spintax || !hasAiProfiles}
-                    onChange={(e) => setDmForm({ ...dmForm, spintax_ai: e.target.checked && hasAiProfiles })}
-                  />
-                  AI Spintax
-                </label>
-              </div>
-              <label>
-                AI variations
-                <input
-                  type="number"
-                  min={2}
-                  max={12}
-                  disabled={!dmForm.use_spintax || !dmForm.spintax_ai || !hasAiProfiles}
-                  value={dmForm.spintax_variations}
-                  onChange={(e) => setDmForm({ ...dmForm, spintax_variations: e.target.value })}
-                />
-              </label>
-              <div className="helper-text">{SPINTAX_HELP}</div>
-              {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
-              <button
-                className="primary"
-                onClick={() =>
-                  handleJobStart(
-                    "DM campaign",
-                    api.startDm({
-                      session: dmForm.session,
-                      input_file: dmForm.input_file,
-                      message: dmForm.message,
-                      use_spintax: dmForm.use_spintax,
-                      spintax_ai: hasAiProfiles ? dmForm.spintax_ai : false,
-                      spintax_variations:
-                        hasAiProfiles && dmForm.spintax_ai && dmForm.spintax_variations
-                          ? toOptionalInt(dmForm.spintax_variations)
-                          : undefined,
-                      media_path: dmForm.media_path || undefined,
-                      preset_name: dmForm.preset_name || undefined,
-                      targeting: buildTargeting(dmForm),
-                    })
-                  )
-                }
+            <div className="form-grid">
+              <SectionCard
+                title="Setup"
+                description="Choose the rate preset first. Leave it empty if you want TGCampaigner defaults."
+                status={<StatusBadge tone={dmForm.preset_name ? "ok" : "neutral"}>{dmForm.preset_name || "Using defaults"}</StatusBadge>}
               >
-                Start DM
-              </button>
+                <label>
+                  <span className="label-text">
+                    Preset
+                    <TooltipInfo>Presets control delays, pacing, and safety behavior for DMs.</TooltipInfo>
+                  </span>
+                  <PresetSelect
+                    value={dmForm.preset_name}
+                    options={presetOptions}
+                    placeholder="Select preset"
+                    searchPlaceholder="Search DM presets..."
+                    onChange={(next) => setDmForm({ ...dmForm, preset_name: next })}
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Inputs"
+                description="Load the target CSV, write the message, and optionally attach media."
+              >
+                <FilePathField
+                  label="CSV file"
+                  kind="csv"
+                  accept=".csv,text/csv"
+                  value={dmForm.input_file}
+                  onChange={(next) => setDmForm({ ...dmForm, input_file: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+                <label>
+                  <span className="label-text">
+                    Message
+                    <TooltipInfo wide>Use the final text exactly as it should be sent. Spintax is optional and configured below.</TooltipInfo>
+                  </span>
+                  <textarea
+                    value={dmForm.message}
+                    onChange={(e) => setDmForm({ ...dmForm, message: e.target.value })}
+                    rows={4}
+                  />
+                </label>
+                <FilePathField
+                  label="Media path (optional)"
+                  kind="media"
+                  value={dmForm.media_path}
+                  onChange={(next) => setDmForm({ ...dmForm, media_path: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+              </SectionCard>
+
+              <SectionCard
+                title="Options"
+                description="Use spintax only when you need message variation. AI Spintax stays disabled until an AI profile exists."
+              >
+                <div className="toggles">
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={dmForm.use_spintax}
+                      onChange={(e) =>
+                        setDmForm({
+                          ...dmForm,
+                          use_spintax: e.target.checked,
+                          spintax_ai: e.target.checked && hasAiProfiles ? dmForm.spintax_ai : false,
+                        })
+                      }
+                    />
+                    Spintax
+                  </label>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={dmForm.spintax_ai}
+                      disabled={!dmForm.use_spintax || !hasAiProfiles}
+                      onChange={(e) => setDmForm({ ...dmForm, spintax_ai: e.target.checked && hasAiProfiles })}
+                    />
+                    AI Spintax
+                  </label>
+                </div>
+                <label>
+                  <span className="label-text">
+                    AI variations
+                    <TooltipInfo>How many variants AI Spintax should generate before one is chosen per message.</TooltipInfo>
+                  </span>
+                  <input
+                    type="number"
+                    min={2}
+                    max={12}
+                    disabled={!dmForm.use_spintax || !dmForm.spintax_ai || !hasAiProfiles}
+                    value={dmForm.spintax_variations}
+                    onChange={(e) => setDmForm({ ...dmForm, spintax_variations: e.target.value })}
+                  />
+                </label>
+                <div className="helper-text">{SPINTAX_HELP}</div>
+                {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start only after the readiness block on the left is fully green."
+                status={<StatusBadge tone={singleReady ? "ok" : "warn"}>{singleReady ? "Ready to start" : "Missing required input"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() =>
+                    handleJobStart(
+                      "DM campaign",
+                      api.startDm({
+                        session: dmForm.session,
+                        input_file: dmForm.input_file,
+                        message: dmForm.message,
+                        use_spintax: dmForm.use_spintax,
+                        spintax_ai: hasAiProfiles ? dmForm.spintax_ai : false,
+                        spintax_variations:
+                          hasAiProfiles && dmForm.spintax_ai && dmForm.spintax_variations
+                            ? toOptionalInt(dmForm.spintax_variations)
+                            : undefined,
+                        media_path: dmForm.media_path || undefined,
+                        preset_name: dmForm.preset_name || undefined,
+                        targeting: buildTargeting(dmForm),
+                      })
+                    )
+                  }
+                >
+                  Start DM
+                </button>
+              </SectionCard>
             </div>
           </div>
           )}
@@ -5471,114 +6037,151 @@ function App() {
               <h3>Invite Link DM</h3>
               <span className="hint">DM invite to group/channel</span>
             </div>
-	            <div className="form-grid">
-	              <label>
-	                Preset
-	                <PresetSelect
-	                  value={inviteForm.preset_name}
-	                  options={presetOptions}
-	                  placeholder="Select preset"
-	                  searchPlaceholder="Search DM presets..."
-	                  onChange={(next) => setInviteForm({ ...inviteForm, preset_name: next })}
-	                />
-	              </label>
-              <FilePathField
-                label="CSV file"
-                kind="csv"
-                accept=".csv,text/csv"
-                value={inviteForm.input_file}
-                onChange={(next) => setInviteForm({ ...inviteForm, input_file: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-              <label>
-                Invite URL
-                <input
-                  type="text"
-                  value={inviteForm.invite_url}
-                  onChange={(e) => setInviteForm({ ...inviteForm, invite_url: e.target.value })}
-                  placeholder="https://t.me/yourgroup"
-                />
-              </label>
-              <label>
-                Message (use [invite])
-                <textarea
-                  value={inviteForm.message}
-                  onChange={(e) => setInviteForm({ ...inviteForm, message: e.target.value })}
-                  rows={3}
-                />
-              </label>
-              <FilePathField
-                label="Media path (optional)"
-                kind="media"
-                value={inviteForm.media_path}
-                onChange={(next) => setInviteForm({ ...inviteForm, media_path: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-              <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={inviteForm.use_spintax}
-                    onChange={(e) =>
-                      setInviteForm({
-                        ...inviteForm,
-                        use_spintax: e.target.checked,
-                        spintax_ai: e.target.checked && hasAiProfiles ? inviteForm.spintax_ai : false,
-                      })
-                    }
-                  />
-                  Spintax
-                </label>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={inviteForm.spintax_ai}
-                    disabled={!inviteForm.use_spintax || !hasAiProfiles}
-                    onChange={(e) => setInviteForm({ ...inviteForm, spintax_ai: e.target.checked && hasAiProfiles })}
-                  />
-                  AI Spintax
-                </label>
-              </div>
-              <label>
-                AI variations
-                <input
-                  type="number"
-                  min={2}
-                  max={12}
-                  disabled={!inviteForm.use_spintax || !inviteForm.spintax_ai || !hasAiProfiles}
-                  value={inviteForm.spintax_variations}
-                  onChange={(e) => setInviteForm({ ...inviteForm, spintax_variations: e.target.value })}
-                />
-              </label>
-              <div className="helper-text">{SPINTAX_HELP}</div>
-              {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
-              <button
-                className="primary"
-                onClick={() =>
-                  handleJobStart(
-                    "Invite DM",
-                    api.startInviteDm({
-                      session: inviteForm.session,
-                      input_file: inviteForm.input_file,
-                      invite_url: inviteForm.invite_url,
-                      message: inviteForm.message || undefined,
-                      use_spintax: inviteForm.use_spintax,
-                      spintax_ai: hasAiProfiles ? inviteForm.spintax_ai : false,
-                      spintax_variations:
-                        hasAiProfiles && inviteForm.spintax_ai && inviteForm.spintax_variations
-                          ? toOptionalInt(inviteForm.spintax_variations)
-                          : undefined,
-                      media_path: inviteForm.media_path || undefined,
-                      preset_name: inviteForm.preset_name || undefined,
-                      targeting: buildTargeting(inviteForm),
-                    })
-                  )
-                }
+            <div className="form-grid">
+              <SectionCard
+                title="Setup"
+                description="Choose a DM preset first. It controls delays and safety behavior for invite messages too."
+                status={<StatusBadge tone={inviteForm.preset_name ? "ok" : "neutral"}>{inviteForm.preset_name || "Using defaults"}</StatusBadge>}
               >
-                Start Invite DM
-              </button>
+                <label>
+                  <span className="label-text">
+                    Preset
+                    <TooltipInfo>DM presets also apply to invite-link campaigns.</TooltipInfo>
+                  </span>
+                  <PresetSelect
+                    value={inviteForm.preset_name}
+                    options={presetOptions}
+                    placeholder="Select preset"
+                    searchPlaceholder="Search DM presets..."
+                    onChange={(next) => setInviteForm({ ...inviteForm, preset_name: next })}
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Inputs"
+                description="Load your target CSV, define the invite destination, and optionally include a message and media."
+              >
+                <FilePathField
+                  label="CSV file"
+                  kind="csv"
+                  accept=".csv,text/csv"
+                  value={inviteForm.input_file}
+                  onChange={(next) => setInviteForm({ ...inviteForm, input_file: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+                <label>
+                  <span className="label-text">
+                    Invite URL
+                    <TooltipInfo>Public invite link for the group or channel you want to promote.</TooltipInfo>
+                  </span>
+                  <input
+                    type="text"
+                    value={inviteForm.invite_url}
+                    onChange={(e) => setInviteForm({ ...inviteForm, invite_url: e.target.value })}
+                    placeholder="https://t.me/yourgroup"
+                  />
+                </label>
+                <label>
+                  <span className="label-text">
+                    Message (use [invite])
+                    <TooltipInfo wide>Use the [invite] token where you want TGCampaigner to place the invite URL.</TooltipInfo>
+                  </span>
+                  <textarea
+                    value={inviteForm.message}
+                    onChange={(e) => setInviteForm({ ...inviteForm, message: e.target.value })}
+                    rows={4}
+                  />
+                </label>
+                <FilePathField
+                  label="Media path (optional)"
+                  kind="media"
+                  value={inviteForm.media_path}
+                  onChange={(next) => setInviteForm({ ...inviteForm, media_path: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+              </SectionCard>
+
+              <SectionCard
+                title="Options"
+                description="Enable spintax only when you need variation. AI Spintax requires a configured AI profile."
+              >
+                <div className="toggles">
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={inviteForm.use_spintax}
+                      onChange={(e) =>
+                        setInviteForm({
+                          ...inviteForm,
+                          use_spintax: e.target.checked,
+                          spintax_ai: e.target.checked && hasAiProfiles ? inviteForm.spintax_ai : false,
+                        })
+                      }
+                    />
+                    Spintax
+                  </label>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={inviteForm.spintax_ai}
+                      disabled={!inviteForm.use_spintax || !hasAiProfiles}
+                      onChange={(e) => setInviteForm({ ...inviteForm, spintax_ai: e.target.checked && hasAiProfiles })}
+                    />
+                    AI Spintax
+                  </label>
+                </div>
+                <label>
+                  <span className="label-text">
+                    AI variations
+                    <TooltipInfo>Number of alternate invite messages AI Spintax should produce.</TooltipInfo>
+                  </span>
+                  <input
+                    type="number"
+                    min={2}
+                    max={12}
+                    disabled={!inviteForm.use_spintax || !inviteForm.spintax_ai || !hasAiProfiles}
+                    value={inviteForm.spintax_variations}
+                    onChange={(e) => setInviteForm({ ...inviteForm, spintax_variations: e.target.value })}
+                  />
+                </label>
+                <div className="helper-text">{SPINTAX_HELP}</div>
+                {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start after the readiness block confirms session, CSV, and invite destination."
+                status={<StatusBadge tone={singleReady ? "ok" : "warn"}>{singleReady ? "Ready to start" : "Missing required input"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() =>
+                    handleJobStart(
+                      "Invite DM",
+                      api.startInviteDm({
+                        session: inviteForm.session,
+                        input_file: inviteForm.input_file,
+                        invite_url: inviteForm.invite_url,
+                        message: inviteForm.message || undefined,
+                        use_spintax: inviteForm.use_spintax,
+                        spintax_ai: hasAiProfiles ? inviteForm.spintax_ai : false,
+                        spintax_variations:
+                          hasAiProfiles && inviteForm.spintax_ai && inviteForm.spintax_variations
+                            ? toOptionalInt(inviteForm.spintax_variations)
+                            : undefined,
+                        media_path: inviteForm.media_path || undefined,
+                        preset_name: inviteForm.preset_name || undefined,
+                        targeting: buildTargeting(inviteForm),
+                      })
+                    )
+                  }
+                >
+                  Start Invite DM
+                </button>
+              </SectionCard>
             </div>
           </div>
           )}
@@ -5589,51 +6192,77 @@ function App() {
               <h3>Bulk Add</h3>
               <span className="hint">Invite users to group</span>
             </div>
-	            <div className="form-grid">
-	              <label>
-	                Preset
-	                <PresetSelect
-	                  value={bulkAddForm.preset_name}
-	                  options={presetOptions}
-	                  placeholder="Select preset"
-	                  searchPlaceholder="Search DM presets..."
-	                  onChange={(next) => setBulkAddForm({ ...bulkAddForm, preset_name: next })}
-	                />
-	              </label>
-              <FilePathField
-                label="CSV file"
-                kind="csv"
-                accept=".csv,text/csv"
-                value={bulkAddForm.input_file}
-                onChange={(next) => setBulkAddForm({ ...bulkAddForm, input_file: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-              <label>
-                Target group (@group or id)
-                <input
-                  type="text"
-                  value={bulkAddForm.target_ref}
-                  onChange={(e) => setBulkAddForm({ ...bulkAddForm, target_ref: e.target.value })}
-                />
-              </label>
-              <button
-                className="primary"
-                onClick={() =>
-                  handleJobStart(
-                    "Bulk add",
-                    api.startBulkAdd({
-                      session: bulkAddForm.session,
-                      input_file: bulkAddForm.input_file,
-                      target_ref: bulkAddForm.target_ref,
-                      preset_name: bulkAddForm.preset_name || undefined,
-                      targeting: buildTargeting(bulkAddForm),
-                    })
-                  )
-                }
+            <div className="form-grid">
+              <SectionCard
+                title="Setup"
+                description="Choose a preset if you want controlled pacing. Leave it empty to use default add behavior."
+                status={<StatusBadge tone={bulkAddForm.preset_name ? "ok" : "neutral"}>{bulkAddForm.preset_name || "Using defaults"}</StatusBadge>}
               >
-                Start Bulk Add
-              </button>
+                <label>
+                  <span className="label-text">
+                    Preset
+                    <TooltipInfo>Presets apply pacing and targeting filters before users are added.</TooltipInfo>
+                  </span>
+                  <PresetSelect
+                    value={bulkAddForm.preset_name}
+                    options={presetOptions}
+                    placeholder="Select preset"
+                    searchPlaceholder="Search DM presets..."
+                    onChange={(next) => setBulkAddForm({ ...bulkAddForm, preset_name: next })}
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Inputs"
+                description="Load the users CSV and define the destination group."
+              >
+                <FilePathField
+                  label="CSV file"
+                  kind="csv"
+                  accept=".csv,text/csv"
+                  value={bulkAddForm.input_file}
+                  onChange={(next) => setBulkAddForm({ ...bulkAddForm, input_file: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+                <label>
+                  <span className="label-text">
+                    Target group
+                    <TooltipInfo>Use @groupusername or a numeric group id that the selected session can access.</TooltipInfo>
+                  </span>
+                  <input
+                    type="text"
+                    value={bulkAddForm.target_ref}
+                    onChange={(e) => setBulkAddForm({ ...bulkAddForm, target_ref: e.target.value })}
+                    placeholder="@group or id"
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start when the session, CSV, and target group are all ready."
+                status={<StatusBadge tone={singleReady ? "ok" : "warn"}>{singleReady ? "Ready to start" : "Missing required input"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() =>
+                    handleJobStart(
+                      "Bulk add",
+                      api.startBulkAdd({
+                        session: bulkAddForm.session,
+                        input_file: bulkAddForm.input_file,
+                        target_ref: bulkAddForm.target_ref,
+                        preset_name: bulkAddForm.preset_name || undefined,
+                        targeting: buildTargeting(bulkAddForm),
+                      })
+                    )
+                  }
+                >
+                  Start Bulk Add
+                </button>
+              </SectionCard>
             </div>
           </div>
           )}
@@ -5644,90 +6273,130 @@ function App() {
               <h3>Forward Message</h3>
               <span className="hint">Forward from source to users</span>
             </div>
-	            <div className="form-grid">
-	              <label>
-	                Preset
-	                <PresetSelect
-	                  value={forwardForm.preset_name}
-	                  options={presetOptions}
-	                  placeholder="Select preset"
-	                  searchPlaceholder="Search DM presets..."
-	                  onChange={(next) => setForwardForm({ ...forwardForm, preset_name: next })}
-	                />
-	              </label>
-              <FilePathField
-                label="CSV file"
-                kind="csv"
-                accept=".csv,text/csv"
-                value={forwardForm.input_file}
-                onChange={(next) => setForwardForm({ ...forwardForm, input_file: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-              <label>
-                Source peer (@channel or id)
-                <input
-                  type="text"
-                  value={forwardForm.source_peer}
-                  onChange={(e) => setForwardForm({ ...forwardForm, source_peer: e.target.value })}
-                />
-              </label>
-              <label>
-                Message ID
-                <input
-                  type="number"
-                  value={forwardForm.message_id}
-                  onChange={(e) => setForwardForm({ ...forwardForm, message_id: e.target.value })}
-                />
-              </label>
-              <label>
-                Or message link
-                <input
-                  type="text"
-                  value={forwardForm.message_link}
-                  onChange={(e) => setForwardForm({ ...forwardForm, message_link: e.target.value })}
-                  placeholder="https://t.me/..."
-                />
-              </label>
-              <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={forwardForm.drop_author}
-                    onChange={(e) => setForwardForm({ ...forwardForm, drop_author: e.target.checked })}
-                  />
-                  Drop author
-                </label>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={forwardForm.has_media}
-                    onChange={(e) => setForwardForm({ ...forwardForm, has_media: e.target.checked })}
-                  />
-                  Contains media
-                </label>
-              </div>
-              <button
-                className="primary"
-                onClick={() =>
-                  handleJobStart(
-                    "Forward",
-                    api.startForward({
-                      session: forwardForm.session,
-                      input_file: forwardForm.input_file,
-                      source_peer: forwardForm.source_peer || undefined,
-                      message_id: forwardForm.message_id ? toInt(forwardForm.message_id, 0) : undefined,
-                      message_link: forwardForm.message_link || undefined,
-                      drop_author: forwardForm.drop_author,
-                      has_media: forwardForm.has_media,
-                      preset_name: forwardForm.preset_name || undefined,
-                      targeting: buildTargeting(forwardForm),
-                    })
-                  )
-                }
+            <div className="form-grid">
+              <SectionCard
+                title="Setup"
+                description="Choose a preset if you want controlled pacing for forwards."
+                status={<StatusBadge tone={forwardForm.preset_name ? "ok" : "neutral"}>{forwardForm.preset_name || "Using defaults"}</StatusBadge>}
               >
-                Start Forward
-              </button>
+                <label>
+                  <span className="label-text">
+                    Preset
+                    <TooltipInfo>Forward jobs reuse DM pacing presets and their targeting filters.</TooltipInfo>
+                  </span>
+                  <PresetSelect
+                    value={forwardForm.preset_name}
+                    options={presetOptions}
+                    placeholder="Select preset"
+                    searchPlaceholder="Search DM presets..."
+                    onChange={(next) => setForwardForm({ ...forwardForm, preset_name: next })}
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Inputs"
+                description="Load target users, then point TGCampaigner to the source message by link or by peer plus message id."
+              >
+                <FilePathField
+                  label="CSV file"
+                  kind="csv"
+                  accept=".csv,text/csv"
+                  value={forwardForm.input_file}
+                  onChange={(next) => setForwardForm({ ...forwardForm, input_file: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+                <div className="form-grid two-up-grid">
+                  <label>
+                    <span className="label-text">
+                      Source peer
+                      <TooltipInfo>Channel, group, or numeric id containing the message to forward.</TooltipInfo>
+                    </span>
+                    <input
+                      type="text"
+                      value={forwardForm.source_peer}
+                      onChange={(e) => setForwardForm({ ...forwardForm, source_peer: e.target.value })}
+                      placeholder="@channel or id"
+                    />
+                  </label>
+                  <label>
+                    <span className="label-text">
+                      Message ID
+                      <TooltipInfo>Required if you do not provide a full Telegram message link.</TooltipInfo>
+                    </span>
+                    <input
+                      type="number"
+                      value={forwardForm.message_id}
+                      onChange={(e) => setForwardForm({ ...forwardForm, message_id: e.target.value })}
+                    />
+                  </label>
+                </div>
+                <label>
+                  <span className="label-text">
+                    Or message link
+                    <TooltipInfo>Paste a full Telegram message URL to avoid manually entering peer and message id.</TooltipInfo>
+                  </span>
+                  <input
+                    type="text"
+                    value={forwardForm.message_link}
+                    onChange={(e) => setForwardForm({ ...forwardForm, message_link: e.target.value })}
+                    placeholder="https://t.me/..."
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Options"
+                description="Use these only when the source content requires them."
+              >
+                <div className="toggles">
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={forwardForm.drop_author}
+                      onChange={(e) => setForwardForm({ ...forwardForm, drop_author: e.target.checked })}
+                    />
+                    Drop author
+                  </label>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={forwardForm.has_media}
+                      onChange={(e) => setForwardForm({ ...forwardForm, has_media: e.target.checked })}
+                    />
+                    Contains media
+                  </label>
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start when the selected session, CSV, and source message are all identified."
+                status={<StatusBadge tone={singleReady ? "ok" : "warn"}>{singleReady ? "Ready to start" : "Missing required input"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() =>
+                    handleJobStart(
+                      "Forward",
+                      api.startForward({
+                        session: forwardForm.session,
+                        input_file: forwardForm.input_file,
+                        source_peer: forwardForm.source_peer || undefined,
+                        message_id: forwardForm.message_id ? toInt(forwardForm.message_id, 0) : undefined,
+                        message_link: forwardForm.message_link || undefined,
+                        drop_author: forwardForm.drop_author,
+                        has_media: forwardForm.has_media,
+                        preset_name: forwardForm.preset_name || undefined,
+                        targeting: buildTargeting(forwardForm),
+                      })
+                    )
+                  }
+                >
+                  Start Forward
+                </button>
+              </SectionCard>
             </div>
           </div>
           )}
@@ -5739,58 +6408,81 @@ function App() {
               <span className="hint">Update name/bio/photo</span>
             </div>
             <div className="form-grid">
-              <label>
-                First name
-                <input
-                  type="text"
-                  value={profileForm.first_name}
-                  onChange={(e) => setProfileForm({ ...profileForm, first_name: e.target.value })}
-                />
-              </label>
-              <label>
-                Last name
-                <input
-                  type="text"
-                  value={profileForm.last_name}
-                  onChange={(e) => setProfileForm({ ...profileForm, last_name: e.target.value })}
-                />
-              </label>
-              <label>
-                Bio
-                <textarea
-                  value={profileForm.bio}
-                  onChange={(e) => setProfileForm({ ...profileForm, bio: e.target.value })}
-                  rows={3}
-                />
-              </label>
-              <FilePathField
-                label="Photo path"
-                kind="photo"
-                accept="image/jpeg,image/png,image/webp"
-                value={profileForm.photo}
-                onChange={(next) => setProfileForm({ ...profileForm, photo: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-              <button
-                className="primary"
-                onClick={() =>
-                  handleJobStart(
-                    "Profile update",
-                    api.startProfile({
-                      session: profileForm.session,
-                      profile: {
-                        first_name: profileForm.first_name || null,
-                        last_name: profileForm.last_name || null,
-                        bio: profileForm.bio || null,
-                        photo: profileForm.photo || null,
-                      },
-                    })
-                  )
-                }
+              <SectionCard
+                title="Inputs"
+                description="Fill only the fields you want to change. Blank fields are left unchanged."
               >
-                Update Profile
-              </button>
+                <div className="form-grid two-up-grid">
+                  <label>
+                    <span className="label-text">
+                      First name
+                      <TooltipInfo>Optional. Leave blank to keep the current first name.</TooltipInfo>
+                    </span>
+                    <input
+                      type="text"
+                      value={profileForm.first_name}
+                      onChange={(e) => setProfileForm({ ...profileForm, first_name: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    <span className="label-text">
+                      Last name
+                      <TooltipInfo>Optional. Leave blank to keep the current last name.</TooltipInfo>
+                    </span>
+                    <input
+                      type="text"
+                      value={profileForm.last_name}
+                      onChange={(e) => setProfileForm({ ...profileForm, last_name: e.target.value })}
+                    />
+                  </label>
+                </div>
+                <label>
+                  <span className="label-text">
+                    Bio
+                    <TooltipInfo>Optional. Use this for short profile rotation text or leave blank to keep the current bio.</TooltipInfo>
+                  </span>
+                  <textarea
+                    value={profileForm.bio}
+                    onChange={(e) => setProfileForm({ ...profileForm, bio: e.target.value })}
+                    rows={3}
+                  />
+                </label>
+                <FilePathField
+                  label="Photo path"
+                  kind="photo"
+                  accept="image/jpeg,image/png,image/webp"
+                  value={profileForm.photo}
+                  onChange={(next) => setProfileForm({ ...profileForm, photo: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start only after you have at least one change ready."
+                status={<StatusBadge tone={singleReady ? "ok" : "warn"}>{singleReady ? "Ready to update" : "No profile changes yet"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() =>
+                    handleJobStart(
+                      "Profile update",
+                      api.startProfile({
+                        session: profileForm.session,
+                        profile: {
+                          first_name: profileForm.first_name || null,
+                          last_name: profileForm.last_name || null,
+                          bio: profileForm.bio || null,
+                          photo: profileForm.photo || null,
+                        },
+                      })
+                    )
+                  }
+                >
+                  Update Profile
+                </button>
+              </SectionCard>
             </div>
           </div>
           )}
@@ -5802,56 +6494,71 @@ function App() {
               <span className="hint">Group-only warmup with AI context</span>
             </div>
             <div className="form-grid">
-              <p className="hint">
-                Warmup mode is defined by the preset (React / Reply / Message). Uses the last 50 messages for context and falls back to reactions if no AI profile is available.
-              </p>
-              <label>
-                Targets (group @usernames)
-                <input
-                  type="text"
-                  value={warmupForm.targets}
-                  onChange={(e) => setWarmupForm({ ...warmupForm, targets: e.target.value })}
-                  placeholder="@group1, @group2"
-                />
-              </label>
-	              <label>
-	                Warmup preset
-	                <PresetSelect
-	                  value={warmupForm.preset_name}
-	                  options={warmupPresets}
-	                  placeholder="Select warmup preset"
-	                  searchPlaceholder="Search warmup presets..."
-	                  onChange={(next) => setWarmupForm({ ...warmupForm, preset_name: next })}
-	                />
-	              </label>
-              <button
-                className="primary"
-                onClick={() => {
-                  if (!warmupForm.session) {
-                    setError("Select a session for warmup");
-                    return;
-                  }
-                  const targets = parseTargets(warmupForm.targets).filter((t) => t !== "me");
-                  if (targets.length === 0) {
-                    setError("Warmup targets must be group usernames");
-                    return;
-                  }
-                  if (!warmupForm.preset_name) {
-                    setError("Select a warmup preset");
-                    return;
-                  }
-                  handleJobStart(
-                    "Warmup",
-                    api.startWarmup({
-                      session: warmupForm.session,
-                      targets,
-                      preset_name: warmupForm.preset_name,
-                    })
-                  );
-                }}
+              <SectionCard
+                title="Inputs"
+                description="Warmup mode comes from the selected preset. TGCampaigner uses recent context and falls back to reactions when AI is not available."
               >
-                Start Warmup
-              </button>
+                <label>
+                  <span className="label-text">
+                    Targets
+                    <TooltipInfo wide>Enter group usernames only, separated by commas or new lines. Personal usernames are not valid warmup targets.</TooltipInfo>
+                  </span>
+                  <input
+                    type="text"
+                    value={warmupForm.targets}
+                    onChange={(e) => setWarmupForm({ ...warmupForm, targets: e.target.value })}
+                    placeholder="@group1, @group2"
+                  />
+                </label>
+                <label>
+                  <span className="label-text">
+                    Warmup preset
+                    <TooltipInfo>Preset decides whether the session reacts, replies, or posts messages during warmup.</TooltipInfo>
+                  </span>
+                  <PresetSelect
+                    value={warmupForm.preset_name}
+                    options={warmupPresets}
+                    placeholder="Select warmup preset"
+                    searchPlaceholder="Search warmup presets..."
+                    onChange={(next) => setWarmupForm({ ...warmupForm, preset_name: next })}
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start after the session, group targets, and preset are all ready."
+                status={<StatusBadge tone={singleReady ? "ok" : "warn"}>{singleReady ? "Ready to start" : "Missing required input"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() => {
+                    if (!warmupForm.session) {
+                      setError("Select a session for warmup");
+                      return;
+                    }
+                    const targets = parseTargets(warmupForm.targets).filter((t) => t !== "me");
+                    if (targets.length === 0) {
+                      setError("Warmup targets must be group usernames");
+                      return;
+                    }
+                    if (!warmupForm.preset_name) {
+                      setError("Select a warmup preset");
+                      return;
+                    }
+                    handleJobStart(
+                      "Warmup",
+                      api.startWarmup({
+                        session: warmupForm.session,
+                        targets,
+                        preset_name: warmupForm.preset_name,
+                      })
+                    );
+                  }}
+                >
+                  Start Warmup
+                </button>
+              </SectionCard>
             </div>
           </div>
           )}
