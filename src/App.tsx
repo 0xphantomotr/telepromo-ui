@@ -3307,6 +3307,21 @@ function App() {
   const showMetrics = activeTab === "metrics";
   const showLicense = activeTab === "license";
   const runningJobs = useMemo(() => jobs.filter((job) => job.status === "running"), [jobs]);
+  const failedJobs = useMemo(
+    () => jobs.filter((job) => Boolean(job.error) || ["failed", "error", "stopped"].includes((job.status || "").toLowerCase())),
+    [jobs]
+  );
+  const latestJob = useMemo(
+    () =>
+      jobs
+        .slice()
+        .sort((a, b) => (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || ""))[0] || null,
+    [jobs]
+  );
+  const selectedLogJob = useMemo(
+    () => jobs.find((job) => job.id === selectedJobId) || latestJob,
+    [jobs, latestJob, selectedJobId]
+  );
   const updateStatusIsError = updateStatusMessage?.toLowerCase().includes("failed") ?? false;
   const showUpdateBanner =
     isTauri() && (Boolean(updateInfo?.available) || checkingUpdates || preparingUpdate || updateStatusIsError);
@@ -3447,6 +3462,107 @@ function App() {
     }
   })();
   const singleReady = singleReadinessItems.every((item) => item.ready);
+  const multiReadinessItems: ReadinessItem[] = (() => {
+    const sessionDetail =
+      selectedMultiSessions.length > 0
+        ? `${selectedMultiSessions.length} session${selectedMultiSessions.length === 1 ? "" : "s"} selected.`
+        : "Select at least one sending session.";
+    switch (multiPanel) {
+      case "multi-dm":
+        return [
+          { label: "Sessions selected", ready: selectedMultiSessions.length > 0, detail: sessionDetail },
+          { label: "CSV loaded", ready: hasText(multiForm.input_file), detail: multiForm.input_file || "Import or paste a CSV path with targets." },
+          { label: "Message ready", ready: hasText(multiForm.message), detail: hasText(multiForm.message) ? "Message body set." : "Add the DM text to send." },
+          {
+            label: "AI Spintax ready",
+            ready: !multiForm.spintax_ai || hasAiProfiles,
+            detail: multiForm.spintax_ai ? (hasAiProfiles ? "AI profile available." : "Create an AI profile first.") : "Optional.",
+          },
+        ];
+      case "multi-invite":
+        return [
+          { label: "Sessions selected", ready: selectedMultiSessions.length > 0, detail: sessionDetail },
+          { label: "CSV loaded", ready: hasText(multiInviteForm.input_file), detail: multiInviteForm.input_file || "Import or paste a CSV path with targets." },
+          { label: "Invite URL set", ready: hasText(multiInviteForm.invite_url), detail: multiInviteForm.invite_url || "Add the group or channel invite URL." },
+          {
+            label: "AI Spintax ready",
+            ready: !multiInviteForm.spintax_ai || hasAiProfiles,
+            detail: multiInviteForm.spintax_ai ? (hasAiProfiles ? "AI profile available." : "Create an AI profile first.") : "Optional.",
+          },
+        ];
+      case "multi-bulk":
+        return [
+          { label: "Sessions selected", ready: selectedMultiSessions.length > 0, detail: sessionDetail },
+          { label: "CSV loaded", ready: hasText(multiBulkAddForm.input_file), detail: multiBulkAddForm.input_file || "Import or paste a CSV path with users." },
+          { label: "Target group set", ready: hasText(multiBulkAddForm.target_ref), detail: multiBulkAddForm.target_ref || "Add the destination group @username or id." },
+        ];
+      case "multi-forward":
+        return [
+          { label: "Sessions selected", ready: selectedMultiSessions.length > 0, detail: sessionDetail },
+          { label: "CSV loaded", ready: hasText(multiForwardForm.input_file), detail: multiForwardForm.input_file || "Import or paste a CSV path with users." },
+          {
+            label: "Source message identified",
+            ready: hasText(multiForwardForm.message_link) || (hasText(multiForwardForm.source_peer) && hasText(multiForwardForm.message_id)),
+            detail:
+              multiForwardForm.message_link ||
+              (hasText(multiForwardForm.source_peer) && hasText(multiForwardForm.message_id)
+                ? `${multiForwardForm.source_peer} • #${multiForwardForm.message_id}`
+                : "Provide a message link or source peer + message ID."),
+          },
+        ];
+      case "multi-profile":
+        return [
+          { label: "Sessions selected", ready: selectedMultiSessions.length > 0, detail: sessionDetail },
+          {
+            label: "Profile changes prepared",
+            ready: [multiProfileForm.first_name, multiProfileForm.last_name, multiProfileForm.bio, multiProfileForm.photo].some(hasText),
+            detail: [multiProfileForm.first_name, multiProfileForm.last_name, multiProfileForm.bio, multiProfileForm.photo].some(hasText)
+              ? "At least one field will be updated for each selected session."
+              : "Fill at least one field or choose a photo.",
+          },
+        ];
+      case "multi-warmup":
+        return [
+          { label: "Sessions selected", ready: selectedMultiSessions.length > 0, detail: sessionDetail },
+          {
+            label: "Targets listed",
+            ready: parseTargets(multiWarmupForm.targets).filter((t) => t !== "me").length > 0,
+            detail:
+              parseTargets(multiWarmupForm.targets).filter((t) => t !== "me").length > 0
+                ? `${parseTargets(multiWarmupForm.targets).filter((t) => t !== "me").length} targets ready.`
+                : "Add group usernames separated by commas.",
+          },
+          {
+            label: "Warmup preset selected",
+            ready: hasText(multiWarmupForm.preset_name),
+            detail: multiWarmupForm.preset_name || "Choose the preset that controls the warmup mode.",
+          },
+        ];
+      default:
+        return [];
+    }
+  })();
+  const multiReady = multiReadinessItems.every((item) => item.ready);
+  const metricsStatusItems = [
+    { label: "Jobs", tone: jobs.length > 0 ? "ok" : "neutral", text: `${jobs.length} total` },
+    { label: "Running", tone: runningJobs.length > 0 ? "ok" : "neutral", text: `${runningJobs.length} active` },
+    { label: "Attention", tone: failedJobs.length > 0 ? "warn" : "ok", text: failedJobs.length > 0 ? `${failedJobs.length} issue${failedJobs.length === 1 ? "" : "s"}` : "No failures" },
+    { label: "Log source", tone: selectedLogJob ? "ok" : "neutral", text: selectedLogJob ? selectedLogJob.id : "Latest tail" },
+  ] as const;
+  const licenseStatusItems = [
+    { label: "Machine license", tone: licenseReady ? (licenseActive ? "ok" : "warn") : "neutral", text: !licenseReady ? "Checking..." : licenseActive ? "Active" : "Inactive" },
+    { label: "Customer email", tone: licenseEmail ? "ok" : "neutral", text: licenseEmail || "Not available" },
+    {
+      label: "Token expiry",
+      tone: licenseExp ? "ok" : "neutral",
+      text: licenseExp ? new Date(licenseExp * 1000).toLocaleString() : "Not available",
+    },
+    {
+      label: "Updates",
+      tone: !isTauri() ? "neutral" : canInstallUpdate ? "warn" : "ok",
+      text: !isTauri() ? "Browser mode" : canInstallUpdate ? `v${updateInfo?.latest_version} ready` : "Up to date",
+    },
+  ] as const;
   const singleNavItems = [
     { id: "dm", label: "Direct Message" },
     { id: "invite", label: "Invite Link DM" },
@@ -6570,532 +6686,760 @@ function App() {
       <section className="section">
         <div className="section-header">
           <h2>Multi-Account Campaigns</h2>
-          <span className="hint">Run across multiple sessions</span>
+          <span className="hint">Run the same workflow across multiple sessions</span>
         </div>
-        <div className="panel-grid">
-          <div className="panel">
+        <div className="section-lead">
+          <p>
+            Multi runs share the same structure as Single: choose the sending sessions, prepare the input once, review
+            readiness, then start the job. TGCampaigner fans the work out across the selected accounts.
+          </p>
+        </div>
+        <div className="status-badge-row">
+          <StatusBadge tone={selectedMultiSessions.length > 0 ? "ok" : "warn"}>
+            {selectedMultiSessions.length > 0
+              ? `${selectedMultiSessions.length} session${selectedMultiSessions.length === 1 ? "" : "s"} selected`
+              : "No sessions selected"}
+          </StatusBadge>
+          <StatusBadge tone={presetOptions.length > 0 ? "ok" : "neutral"}>
+            {presetOptions.length > 0 ? `${presetOptions.length} DM presets` : "No DM presets"}
+          </StatusBadge>
+          <StatusBadge tone={warmupPresets.length > 0 ? "ok" : "neutral"}>
+            {warmupPresets.length > 0 ? `${warmupPresets.length} warmup presets` : "No warmup presets"}
+          </StatusBadge>
+          <StatusBadge tone={hasAiProfiles ? "ok" : "neutral"}>
+            {hasAiProfiles ? `${aiReadyProfiles.length} AI profile${aiReadyProfiles.length === 1 ? "" : "s"}` : "No AI profiles"}
+          </StatusBadge>
+        </div>
+        <div className="panel-grid single-layout">
+          <div className="panel single-session-panel">
             <div className="panel-header">
-              <h3>Session Selector</h3>
-              <span className="hint">Pick accounts for multi-run</span>
+              <h3>Sessions</h3>
+              <span className="hint">{selectedMultiSessions.length > 0 ? "Accounts ready" : "Pick accounts"}</span>
             </div>
-            <MultiSessionPicker
-              sessions={sessionViews}
-              selected={multiSessions}
-              onToggle={toggleMultiSession}
-              onSelectAll={selectAllSessions}
-              onClear={clearSessions}
-            />
+            <div className="form-grid">
+              <div className="section-lead">
+                <p>
+                  Select every account that should participate in this run. Filters help you isolate proxy/direct or
+                  currently busy sessions before launching a multi job.
+                </p>
+              </div>
+              <MultiSessionPicker
+                sessions={sessionViews}
+                selected={multiSessions}
+                onToggle={toggleMultiSession}
+                onSelectAll={selectAllSessions}
+                onClear={clearSessions}
+              />
+              <ReadinessChecklist
+                title="Current run readiness"
+                description="Multi runs require selected sessions plus the inputs for the active workflow."
+                items={multiReadinessItems}
+              />
+            </div>
           </div>
 
           {multiPanel === "multi-dm" && (
-          <div className="panel" id="multi-dm">
+          <div className="panel single-panel" id="multi-dm">
             <div className="panel-header">
               <h3>Multi DM</h3>
-              <span className="hint">All sessions DM CSV</span>
+              <span className="hint">All selected sessions DM the same CSV list</span>
             </div>
             <div className="form-grid">
-              <FilePathField
-                label="CSV file"
-                kind="csv"
-                accept=".csv,text/csv"
-                value={multiForm.input_file}
-                onChange={(next) => setMultiForm({ ...multiForm, input_file: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-	              <label>
-	                Preset
-	                <PresetSelect
-	                  value={multiForm.preset_name}
-	                  options={presetOptions}
-	                  placeholder="Select preset"
-	                  searchPlaceholder="Search DM presets..."
-	                  onChange={(next) => setMultiForm({ ...multiForm, preset_name: next })}
-	                />
-	              </label>
-              <label>
-                Message
-                <textarea
-                  value={multiForm.message}
-                  onChange={(e) => setMultiForm({ ...multiForm, message: e.target.value })}
-                  rows={3}
-                />
-              </label>
-              <FilePathField
-                label="Media path (optional)"
-                kind="media"
-                value={multiForm.media_path}
-                onChange={(next) => setMultiForm({ ...multiForm, media_path: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-              <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={multiForm.use_spintax}
-                    onChange={(e) =>
-                      setMultiForm({
-                        ...multiForm,
-                        use_spintax: e.target.checked,
-                        spintax_ai: e.target.checked && hasAiProfiles ? multiForm.spintax_ai : false,
-                      })
-                    }
-                  />
-                  Spintax
-                </label>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={multiForm.spintax_ai}
-                    disabled={!multiForm.use_spintax || !hasAiProfiles}
-                    onChange={(e) => setMultiForm({ ...multiForm, spintax_ai: e.target.checked && hasAiProfiles })}
-                  />
-                  AI Spintax
-                </label>
-              </div>
-              <label>
-                AI variations
-                <input
-                  type="number"
-                  min={2}
-                  max={12}
-                  disabled={!multiForm.use_spintax || !multiForm.spintax_ai || !hasAiProfiles}
-                  value={multiForm.spintax_variations}
-                  onChange={(e) => setMultiForm({ ...multiForm, spintax_variations: e.target.value })}
-                />
-              </label>
-              <div className="helper-text">{SPINTAX_HELP}</div>
-              {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
-              <button
-                className="primary"
-                onClick={() => {
-                  if (!ensureMultiSessions()) return;
-                  handleJobStart(
-                    "Multi DM",
-                    api.startMultiDm({
-                      sessions: selectedMultiSessions,
-                      input_file: multiForm.input_file,
-                      message: multiForm.message,
-                      use_spintax: multiForm.use_spintax,
-                      spintax_ai: hasAiProfiles ? multiForm.spintax_ai : false,
-                      spintax_variations:
-                        hasAiProfiles && multiForm.spintax_ai && multiForm.spintax_variations
-                          ? toOptionalInt(multiForm.spintax_variations)
-                          : undefined,
-                      media_path: multiForm.media_path || undefined,
-                      preset_name: multiForm.preset_name || undefined,
-                      targeting: buildTargeting(multiForm),
-                    })
-                  )
-              }}
+              <SectionCard
+                title="Setup"
+                description="Use a DM preset to keep pacing and targeting consistent across all selected accounts."
+                status={<StatusBadge tone={multiForm.preset_name ? "ok" : "neutral"}>{multiForm.preset_name || "Using defaults"}</StatusBadge>}
               >
-                Start Multi DM
-              </button>
+                <label>
+                  <span className="label-text">
+                    Preset
+                    <TooltipInfo>Presets control delays, pacing, and targeting filters for the whole multi run.</TooltipInfo>
+                  </span>
+                  <PresetSelect
+                    value={multiForm.preset_name}
+                    options={presetOptions}
+                    placeholder="Select preset"
+                    searchPlaceholder="Search DM presets..."
+                    onChange={(next) => setMultiForm({ ...multiForm, preset_name: next })}
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Inputs"
+                description="Load one CSV and one message. TGCampaigner distributes work across the selected sessions."
+              >
+                <FilePathField
+                  label="CSV file"
+                  kind="csv"
+                  accept=".csv,text/csv"
+                  value={multiForm.input_file}
+                  onChange={(next) => setMultiForm({ ...multiForm, input_file: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+                <label>
+                  <span className="label-text">
+                    Message
+                    <TooltipInfo wide>Use the final text exactly as it should be sent. Spintax is optional and configured below.</TooltipInfo>
+                  </span>
+                  <textarea
+                    value={multiForm.message}
+                    onChange={(e) => setMultiForm({ ...multiForm, message: e.target.value })}
+                    rows={3}
+                  />
+                </label>
+                <FilePathField
+                  label="Media path (optional)"
+                  kind="media"
+                  value={multiForm.media_path}
+                  onChange={(next) => setMultiForm({ ...multiForm, media_path: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+              </SectionCard>
+
+              <SectionCard
+                title="Options"
+                description="Enable message variation only if the campaign needs it."
+              >
+                <div className="toggles">
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={multiForm.use_spintax}
+                      onChange={(e) =>
+                        setMultiForm({
+                          ...multiForm,
+                          use_spintax: e.target.checked,
+                          spintax_ai: e.target.checked && hasAiProfiles ? multiForm.spintax_ai : false,
+                        })
+                      }
+                    />
+                    Spintax
+                  </label>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={multiForm.spintax_ai}
+                      disabled={!multiForm.use_spintax || !hasAiProfiles}
+                      onChange={(e) => setMultiForm({ ...multiForm, spintax_ai: e.target.checked && hasAiProfiles })}
+                    />
+                    AI Spintax
+                  </label>
+                </div>
+                <label>
+                  <span className="label-text">
+                    AI variations
+                    <TooltipInfo>How many variants AI Spintax should generate before one is chosen per message.</TooltipInfo>
+                  </span>
+                  <input
+                    type="number"
+                    min={2}
+                    max={12}
+                    disabled={!multiForm.use_spintax || !multiForm.spintax_ai || !hasAiProfiles}
+                    value={multiForm.spintax_variations}
+                    onChange={(e) => setMultiForm({ ...multiForm, spintax_variations: e.target.value })}
+                  />
+                </label>
+                <div className="helper-text">{SPINTAX_HELP}</div>
+                {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start only after sessions, CSV, and message are ready."
+                status={<StatusBadge tone={multiReady ? "ok" : "warn"}>{multiReady ? "Ready to start" : "Missing required input"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() => {
+                    if (!ensureMultiSessions()) return;
+                    handleJobStart(
+                      "Multi DM",
+                      api.startMultiDm({
+                        sessions: selectedMultiSessions,
+                        input_file: multiForm.input_file,
+                        message: multiForm.message,
+                        use_spintax: multiForm.use_spintax,
+                        spintax_ai: hasAiProfiles ? multiForm.spintax_ai : false,
+                        spintax_variations:
+                          hasAiProfiles && multiForm.spintax_ai && multiForm.spintax_variations
+                            ? toOptionalInt(multiForm.spintax_variations)
+                            : undefined,
+                        media_path: multiForm.media_path || undefined,
+                        preset_name: multiForm.preset_name || undefined,
+                        targeting: buildTargeting(multiForm),
+                      })
+                    );
+                  }}
+                >
+                  Start Multi DM
+                </button>
+              </SectionCard>
             </div>
           </div>
           )}
 
           {multiPanel === "multi-invite" && (
-          <div className="panel" id="multi-invite">
+          <div className="panel single-panel" id="multi-invite">
             <div className="panel-header">
               <h3>Multi Invite DM</h3>
               <span className="hint">Invite link + message</span>
             </div>
-	            <div className="form-grid">
-              <FilePathField
-                label="CSV file"
-                kind="csv"
-                accept=".csv,text/csv"
-                value={multiInviteForm.input_file}
-                onChange={(next) => setMultiInviteForm({ ...multiInviteForm, input_file: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-	              <label>
-	                Preset
-	                <PresetSelect
-	                  value={multiInviteForm.preset_name}
-	                  options={presetOptions}
-	                  placeholder="Select preset"
-	                  searchPlaceholder="Search DM presets..."
-	                  onChange={(next) => setMultiInviteForm({ ...multiInviteForm, preset_name: next })}
-	                />
-	              </label>
-              <label>
-                Invite URL
-                <input
-                  type="text"
-                  value={multiInviteForm.invite_url}
-                  onChange={(e) => setMultiInviteForm({ ...multiInviteForm, invite_url: e.target.value })}
-                />
-              </label>
-              <label>
-                Message (use [invite])
-                <textarea
-                  value={multiInviteForm.message}
-                  onChange={(e) => setMultiInviteForm({ ...multiInviteForm, message: e.target.value })}
-                  rows={3}
-                />
-              </label>
-              <FilePathField
-                label="Media path (optional)"
-                kind="media"
-                value={multiInviteForm.media_path}
-                onChange={(next) => setMultiInviteForm({ ...multiInviteForm, media_path: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-              <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={multiInviteForm.use_spintax}
-                    onChange={(e) =>
-                      setMultiInviteForm({
-                        ...multiInviteForm,
-                        use_spintax: e.target.checked,
-                        spintax_ai: e.target.checked && hasAiProfiles ? multiInviteForm.spintax_ai : false,
-                      })
-                    }
-                  />
-                  Spintax
-                </label>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={multiInviteForm.spintax_ai}
-                    disabled={!multiInviteForm.use_spintax || !hasAiProfiles}
-                    onChange={(e) => setMultiInviteForm({ ...multiInviteForm, spintax_ai: e.target.checked && hasAiProfiles })}
-                  />
-                  AI Spintax
-                </label>
-              </div>
-              <label>
-                AI variations
-                <input
-                  type="number"
-                  min={2}
-                  max={12}
-                  disabled={!multiInviteForm.use_spintax || !multiInviteForm.spintax_ai || !hasAiProfiles}
-                  value={multiInviteForm.spintax_variations}
-                  onChange={(e) => setMultiInviteForm({ ...multiInviteForm, spintax_variations: e.target.value })}
-                />
-              </label>
-              <div className="helper-text">{SPINTAX_HELP}</div>
-              {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
-              <button
-                className="primary"
-                onClick={() => {
-                  if (!ensureMultiSessions()) return;
-                  handleJobStart(
-                    "Multi invite DM",
-                    api.startMultiInviteDm({
-                      sessions: selectedMultiSessions,
-                      input_file: multiInviteForm.input_file,
-                      invite_url: multiInviteForm.invite_url,
-                      message: multiInviteForm.message || undefined,
-                      use_spintax: multiInviteForm.use_spintax,
-                      spintax_ai: hasAiProfiles ? multiInviteForm.spintax_ai : false,
-                      spintax_variations:
-                        hasAiProfiles && multiInviteForm.spintax_ai && multiInviteForm.spintax_variations
-                          ? toOptionalInt(multiInviteForm.spintax_variations)
-                          : undefined,
-                      media_path: multiInviteForm.media_path || undefined,
-                      preset_name: multiInviteForm.preset_name || undefined,
-                      targeting: buildTargeting(multiInviteForm),
-                    })
-                  )
-              }}
+            <div className="form-grid">
+              <SectionCard
+                title="Setup"
+                description="DM presets also apply to invite-link campaigns."
+                status={<StatusBadge tone={multiInviteForm.preset_name ? "ok" : "neutral"}>{multiInviteForm.preset_name || "Using defaults"}</StatusBadge>}
               >
-                Start Multi Invite DM
-              </button>
+                <label>
+                  <span className="label-text">
+                    Preset
+                    <TooltipInfo>Invite campaigns reuse DM pacing presets and their targeting filters.</TooltipInfo>
+                  </span>
+                  <PresetSelect
+                    value={multiInviteForm.preset_name}
+                    options={presetOptions}
+                    placeholder="Select preset"
+                    searchPlaceholder="Search DM presets..."
+                    onChange={(next) => setMultiInviteForm({ ...multiInviteForm, preset_name: next })}
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Inputs"
+                description="Load your target list, then provide the invite URL and the DM text that should deliver it."
+              >
+                <FilePathField
+                  label="CSV file"
+                  kind="csv"
+                  accept=".csv,text/csv"
+                  value={multiInviteForm.input_file}
+                  onChange={(next) => setMultiInviteForm({ ...multiInviteForm, input_file: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+                <label>
+                  <span className="label-text">
+                    Invite URL
+                    <TooltipInfo>Public invite link for the group or channel you want to promote.</TooltipInfo>
+                  </span>
+                  <input
+                    type="text"
+                    value={multiInviteForm.invite_url}
+                    onChange={(e) => setMultiInviteForm({ ...multiInviteForm, invite_url: e.target.value })}
+                  />
+                </label>
+                <label>
+                  <span className="label-text">
+                    Message
+                    <TooltipInfo wide>Use the [invite] token where you want TGCampaigner to place the invite URL.</TooltipInfo>
+                  </span>
+                  <textarea
+                    value={multiInviteForm.message}
+                    onChange={(e) => setMultiInviteForm({ ...multiInviteForm, message: e.target.value })}
+                    rows={3}
+                  />
+                </label>
+                <FilePathField
+                  label="Media path (optional)"
+                  kind="media"
+                  value={multiInviteForm.media_path}
+                  onChange={(next) => setMultiInviteForm({ ...multiInviteForm, media_path: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+              </SectionCard>
+
+              <SectionCard
+                title="Options"
+                description="Enable message variation only if the campaign needs it."
+              >
+                <div className="toggles">
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={multiInviteForm.use_spintax}
+                      onChange={(e) =>
+                        setMultiInviteForm({
+                          ...multiInviteForm,
+                          use_spintax: e.target.checked,
+                          spintax_ai: e.target.checked && hasAiProfiles ? multiInviteForm.spintax_ai : false,
+                        })
+                      }
+                    />
+                    Spintax
+                  </label>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={multiInviteForm.spintax_ai}
+                      disabled={!multiInviteForm.use_spintax || !hasAiProfiles}
+                      onChange={(e) =>
+                        setMultiInviteForm({ ...multiInviteForm, spintax_ai: e.target.checked && hasAiProfiles })
+                      }
+                    />
+                    AI Spintax
+                  </label>
+                </div>
+                <label>
+                  <span className="label-text">
+                    AI variations
+                    <TooltipInfo>Number of alternate invite messages AI Spintax should produce.</TooltipInfo>
+                  </span>
+                  <input
+                    type="number"
+                    min={2}
+                    max={12}
+                    disabled={!multiInviteForm.use_spintax || !multiInviteForm.spintax_ai || !hasAiProfiles}
+                    value={multiInviteForm.spintax_variations}
+                    onChange={(e) => setMultiInviteForm({ ...multiInviteForm, spintax_variations: e.target.value })}
+                  />
+                </label>
+                <div className="helper-text">{SPINTAX_HELP}</div>
+                {!hasAiProfiles && <div className="helper-text warning">{AI_SPINTAX_SETUP_HINT}</div>}
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start only after sessions, CSV, invite URL, and message are ready."
+                status={<StatusBadge tone={multiReady ? "ok" : "warn"}>{multiReady ? "Ready to start" : "Missing required input"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() => {
+                    if (!ensureMultiSessions()) return;
+                    handleJobStart(
+                      "Multi invite DM",
+                      api.startMultiInviteDm({
+                        sessions: selectedMultiSessions,
+                        input_file: multiInviteForm.input_file,
+                        invite_url: multiInviteForm.invite_url,
+                        message: multiInviteForm.message || undefined,
+                        use_spintax: multiInviteForm.use_spintax,
+                        spintax_ai: hasAiProfiles ? multiInviteForm.spintax_ai : false,
+                        spintax_variations:
+                          hasAiProfiles && multiInviteForm.spintax_ai && multiInviteForm.spintax_variations
+                            ? toOptionalInt(multiInviteForm.spintax_variations)
+                            : undefined,
+                        media_path: multiInviteForm.media_path || undefined,
+                        preset_name: multiInviteForm.preset_name || undefined,
+                        targeting: buildTargeting(multiInviteForm),
+                      })
+                    );
+                  }}
+                >
+                  Start Multi Invite DM
+                </button>
+              </SectionCard>
             </div>
           </div>
           )}
 
           {multiPanel === "multi-bulk" && (
-          <div className="panel" id="multi-bulk">
+          <div className="panel single-panel" id="multi-bulk">
             <div className="panel-header">
               <h3>Multi Bulk Add</h3>
               <span className="hint">Add users with multiple accounts</span>
             </div>
-	            <div className="form-grid">
-              <FilePathField
-                label="CSV file"
-                kind="csv"
-                accept=".csv,text/csv"
-                value={multiBulkAddForm.input_file}
-                onChange={(next) => setMultiBulkAddForm({ ...multiBulkAddForm, input_file: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-	              <label>
-	                Preset
-	                <PresetSelect
-	                  value={multiBulkAddForm.preset_name}
-	                  options={presetOptions}
-	                  placeholder="Select preset"
-	                  searchPlaceholder="Search DM presets..."
-	                  onChange={(next) => setMultiBulkAddForm({ ...multiBulkAddForm, preset_name: next })}
-	                />
-	              </label>
-              <label>
-                Target group (@group or id)
-                <input
-                  type="text"
-                  value={multiBulkAddForm.target_ref}
-                  onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, target_ref: e.target.value })}
-                />
-              </label>
-              <button
-                className="primary"
-                onClick={() => {
-                  if (!ensureMultiSessions()) return;
-                  handleJobStart(
-                    "Multi bulk add",
-                    api.startMultiBulkAdd({
-                      sessions: selectedMultiSessions,
-                      input_file: multiBulkAddForm.input_file,
-                      target_ref: multiBulkAddForm.target_ref,
-                      preset_name: multiBulkAddForm.preset_name || undefined,
-                      targeting: buildTargeting(multiBulkAddForm),
-                    })
-                  )
-              }}
+            <div className="form-grid">
+              <SectionCard
+                title="Setup"
+                description="Presets apply pacing and targeting filters before users are distributed across accounts."
+                status={<StatusBadge tone={multiBulkAddForm.preset_name ? "ok" : "neutral"}>{multiBulkAddForm.preset_name || "Using defaults"}</StatusBadge>}
               >
-                Start Multi Bulk Add
-              </button>
+                <label>
+                  <span className="label-text">
+                    Preset
+                    <TooltipInfo>Presets apply add pacing and targeting filters before members are queued.</TooltipInfo>
+                  </span>
+                  <PresetSelect
+                    value={multiBulkAddForm.preset_name}
+                    options={presetOptions}
+                    placeholder="Select preset"
+                    searchPlaceholder="Search DM presets..."
+                    onChange={(next) => setMultiBulkAddForm({ ...multiBulkAddForm, preset_name: next })}
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Inputs"
+                description="Load the users once, then choose the destination group that every selected account can access."
+              >
+                <FilePathField
+                  label="CSV file"
+                  kind="csv"
+                  accept=".csv,text/csv"
+                  value={multiBulkAddForm.input_file}
+                  onChange={(next) => setMultiBulkAddForm({ ...multiBulkAddForm, input_file: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+                <label>
+                  <span className="label-text">
+                    Target group
+                    <TooltipInfo>Use @groupusername or a numeric group id that all selected sessions can access.</TooltipInfo>
+                  </span>
+                  <input
+                    type="text"
+                    value={multiBulkAddForm.target_ref}
+                    onChange={(e) => setMultiBulkAddForm({ ...multiBulkAddForm, target_ref: e.target.value })}
+                    placeholder="@group or id"
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start only after sessions, CSV, and the destination group are ready."
+                status={<StatusBadge tone={multiReady ? "ok" : "warn"}>{multiReady ? "Ready to start" : "Missing required input"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() => {
+                    if (!ensureMultiSessions()) return;
+                    handleJobStart(
+                      "Multi bulk add",
+                      api.startMultiBulkAdd({
+                        sessions: selectedMultiSessions,
+                        input_file: multiBulkAddForm.input_file,
+                        target_ref: multiBulkAddForm.target_ref,
+                        preset_name: multiBulkAddForm.preset_name || undefined,
+                        targeting: buildTargeting(multiBulkAddForm),
+                      })
+                    );
+                  }}
+                >
+                  Start Multi Bulk Add
+                </button>
+              </SectionCard>
             </div>
           </div>
           )}
 
           {multiPanel === "multi-forward" && (
-          <div className="panel" id="multi-forward">
+          <div className="panel single-panel" id="multi-forward">
             <div className="panel-header">
               <h3>Multi Forward</h3>
               <span className="hint">Forward from source with many accounts</span>
             </div>
-	            <div className="form-grid">
-              <FilePathField
-                label="CSV file"
-                kind="csv"
-                accept=".csv,text/csv"
-                value={multiForwardForm.input_file}
-                onChange={(next) => setMultiForwardForm({ ...multiForwardForm, input_file: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-	              <label>
-	                Preset
-	                <PresetSelect
-	                  value={multiForwardForm.preset_name}
-	                  options={presetOptions}
-	                  placeholder="Select preset"
-	                  searchPlaceholder="Search DM presets..."
-	                  onChange={(next) => setMultiForwardForm({ ...multiForwardForm, preset_name: next })}
-	                />
-	              </label>
-              <label>
-                Source peer (@channel or id)
-                <input
-                  type="text"
-                  value={multiForwardForm.source_peer}
-                  onChange={(e) => setMultiForwardForm({ ...multiForwardForm, source_peer: e.target.value })}
-                />
-              </label>
-              <label>
-                Message ID
-                <input
-                  type="number"
-                  value={multiForwardForm.message_id}
-                  onChange={(e) => setMultiForwardForm({ ...multiForwardForm, message_id: e.target.value })}
-                />
-              </label>
-              <label>
-                Or message link
-                <input
-                  type="text"
-                  value={multiForwardForm.message_link}
-                  onChange={(e) => setMultiForwardForm({ ...multiForwardForm, message_link: e.target.value })}
-                />
-              </label>
-              <div className="toggles">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={multiForwardForm.drop_author}
-                    onChange={(e) => setMultiForwardForm({ ...multiForwardForm, drop_author: e.target.checked })}
-                  />
-                  Drop author
-                </label>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={multiForwardForm.has_media}
-                    onChange={(e) => setMultiForwardForm({ ...multiForwardForm, has_media: e.target.checked })}
-                  />
-                  Contains media
-                </label>
-              </div>
-              <button
-                className="primary"
-                onClick={() => {
-                  if (!ensureMultiSessions()) return;
-                  handleJobStart(
-                    "Multi forward",
-                    api.startMultiForward({
-                      sessions: selectedMultiSessions,
-                      input_file: multiForwardForm.input_file,
-                      source_peer: multiForwardForm.source_peer || undefined,
-                      message_id: multiForwardForm.message_id ? toInt(multiForwardForm.message_id, 0) : undefined,
-                      message_link: multiForwardForm.message_link || undefined,
-                      drop_author: multiForwardForm.drop_author,
-                      has_media: multiForwardForm.has_media,
-                      preset_name: multiForwardForm.preset_name || undefined,
-                      targeting: buildTargeting(multiForwardForm),
-                    })
-                  )
-              }}
+            <div className="form-grid">
+              <SectionCard
+                title="Setup"
+                description="Forward jobs reuse DM pacing presets and their targeting filters."
+                status={<StatusBadge tone={multiForwardForm.preset_name ? "ok" : "neutral"}>{multiForwardForm.preset_name || "Using defaults"}</StatusBadge>}
               >
-                Start Multi Forward
-              </button>
+                <label>
+                  <span className="label-text">
+                    Preset
+                    <TooltipInfo>Forward jobs reuse DM pacing presets and their targeting filters.</TooltipInfo>
+                  </span>
+                  <PresetSelect
+                    value={multiForwardForm.preset_name}
+                    options={presetOptions}
+                    placeholder="Select preset"
+                    searchPlaceholder="Search DM presets..."
+                    onChange={(next) => setMultiForwardForm({ ...multiForwardForm, preset_name: next })}
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Inputs"
+                description="Load target users, then identify the source message by link or by peer plus message id."
+              >
+                <FilePathField
+                  label="CSV file"
+                  kind="csv"
+                  accept=".csv,text/csv"
+                  value={multiForwardForm.input_file}
+                  onChange={(next) => setMultiForwardForm({ ...multiForwardForm, input_file: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+                <div className="form-grid two-up-grid">
+                  <label>
+                    <span className="label-text">
+                      Source peer
+                      <TooltipInfo>Channel, group, or numeric id containing the message to forward.</TooltipInfo>
+                    </span>
+                    <input
+                      type="text"
+                      value={multiForwardForm.source_peer}
+                      onChange={(e) => setMultiForwardForm({ ...multiForwardForm, source_peer: e.target.value })}
+                      placeholder="@channel or id"
+                    />
+                  </label>
+                  <label>
+                    <span className="label-text">
+                      Message ID
+                      <TooltipInfo>Required if you do not provide a full Telegram message link.</TooltipInfo>
+                    </span>
+                    <input
+                      type="number"
+                      value={multiForwardForm.message_id}
+                      onChange={(e) => setMultiForwardForm({ ...multiForwardForm, message_id: e.target.value })}
+                    />
+                  </label>
+                </div>
+                <label>
+                  <span className="label-text">
+                    Or message link
+                    <TooltipInfo>Paste a full Telegram message URL to avoid manually entering peer and message id.</TooltipInfo>
+                  </span>
+                  <input
+                    type="text"
+                    value={multiForwardForm.message_link}
+                    onChange={(e) => setMultiForwardForm({ ...multiForwardForm, message_link: e.target.value })}
+                    placeholder="https://t.me/..."
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Options"
+                description="Use these only when the source content requires them."
+              >
+                <div className="toggles">
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={multiForwardForm.drop_author}
+                      onChange={(e) => setMultiForwardForm({ ...multiForwardForm, drop_author: e.target.checked })}
+                    />
+                    Drop author
+                  </label>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={multiForwardForm.has_media}
+                      onChange={(e) => setMultiForwardForm({ ...multiForwardForm, has_media: e.target.checked })}
+                    />
+                    Contains media
+                  </label>
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start only after sessions, CSV, and source message are all identified."
+                status={<StatusBadge tone={multiReady ? "ok" : "warn"}>{multiReady ? "Ready to start" : "Missing required input"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() => {
+                    if (!ensureMultiSessions()) return;
+                    handleJobStart(
+                      "Multi forward",
+                      api.startMultiForward({
+                        sessions: selectedMultiSessions,
+                        input_file: multiForwardForm.input_file,
+                        source_peer: multiForwardForm.source_peer || undefined,
+                        message_id: multiForwardForm.message_id ? toInt(multiForwardForm.message_id, 0) : undefined,
+                        message_link: multiForwardForm.message_link || undefined,
+                        drop_author: multiForwardForm.drop_author,
+                        has_media: multiForwardForm.has_media,
+                        preset_name: multiForwardForm.preset_name || undefined,
+                        targeting: buildTargeting(multiForwardForm),
+                      })
+                    );
+                  }}
+                >
+                  Start Multi Forward
+                </button>
+              </SectionCard>
             </div>
           </div>
           )}
 
           {multiPanel === "multi-profile" && (
-          <div className="panel" id="multi-profile">
+          <div className="panel single-panel" id="multi-profile">
             <div className="panel-header">
               <h3>Multi Profile Rotation</h3>
               <span className="hint">Apply profile changes to each session</span>
             </div>
             <div className="form-grid">
-              <label>
-                Delay between sessions (sec)
-                <input
-                  type="number"
-                  value={multiProfileForm.delay_seconds}
-                  onChange={(e) => setMultiProfileForm({ ...multiProfileForm, delay_seconds: e.target.value })}
-                />
-              </label>
-              <label>
-                First name
-                <input
-                  type="text"
-                  value={multiProfileForm.first_name}
-                  onChange={(e) => setMultiProfileForm({ ...multiProfileForm, first_name: e.target.value })}
-                />
-              </label>
-              <label>
-                Last name
-                <input
-                  type="text"
-                  value={multiProfileForm.last_name}
-                  onChange={(e) => setMultiProfileForm({ ...multiProfileForm, last_name: e.target.value })}
-                />
-              </label>
-              <label>
-                Bio
-                <textarea
-                  value={multiProfileForm.bio}
-                  onChange={(e) => setMultiProfileForm({ ...multiProfileForm, bio: e.target.value })}
-                  rows={3}
-                />
-              </label>
-              <FilePathField
-                label="Photo path"
-                kind="photo"
-                accept="image/jpeg,image/png,image/webp"
-                value={multiProfileForm.photo}
-                onChange={(next) => setMultiProfileForm({ ...multiProfileForm, photo: next })}
-                onError={handleFileImportError}
-                onNotice={handleFileImportNotice}
-              />
-              <button
-                className="primary"
-                onClick={() => {
-                  if (!ensureMultiSessions()) return;
-                  const profile_map: Record<string, Record<string, string | null>> = {};
-                  selectedMultiSessions.forEach((session) => {
-                    profile_map[session] = {
-                      first_name: multiProfileForm.first_name || null,
-                      last_name: multiProfileForm.last_name || null,
-                      bio: multiProfileForm.bio || null,
-                      photo: multiProfileForm.photo || null,
-                    };
-                  });
-                  handleJobStart(
-                    "Multi profile",
-                    api.startMultiProfile({
-                      sessions: selectedMultiSessions,
-                      profile_map,
-                      delay_seconds: toInt(multiProfileForm.delay_seconds, 5),
-                    })
-                  );
-                }}
+              <SectionCard
+                title="Inputs"
+                description="Fill only the fields you want to change. Blank fields are left unchanged on every selected session."
               >
-                Start Multi Profile
-              </button>
+                <label>
+                  <span className="label-text">
+                    Delay between sessions
+                    <TooltipInfo>Gap in seconds between each account update during the multi run.</TooltipInfo>
+                  </span>
+                  <input
+                    type="number"
+                    value={multiProfileForm.delay_seconds}
+                    onChange={(e) => setMultiProfileForm({ ...multiProfileForm, delay_seconds: e.target.value })}
+                  />
+                </label>
+                <div className="form-grid two-up-grid">
+                  <label>
+                    <span className="label-text">
+                      First name
+                      <TooltipInfo>Optional. Leave blank to keep the current first name.</TooltipInfo>
+                    </span>
+                    <input
+                      type="text"
+                      value={multiProfileForm.first_name}
+                      onChange={(e) => setMultiProfileForm({ ...multiProfileForm, first_name: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    <span className="label-text">
+                      Last name
+                      <TooltipInfo>Optional. Leave blank to keep the current last name.</TooltipInfo>
+                    </span>
+                    <input
+                      type="text"
+                      value={multiProfileForm.last_name}
+                      onChange={(e) => setMultiProfileForm({ ...multiProfileForm, last_name: e.target.value })}
+                    />
+                  </label>
+                </div>
+                <label>
+                  <span className="label-text">
+                    Bio
+                    <TooltipInfo>Optional. Use this for short profile rotation text or leave blank to keep the current bio.</TooltipInfo>
+                  </span>
+                  <textarea
+                    value={multiProfileForm.bio}
+                    onChange={(e) => setMultiProfileForm({ ...multiProfileForm, bio: e.target.value })}
+                    rows={3}
+                  />
+                </label>
+                <FilePathField
+                  label="Photo path"
+                  kind="photo"
+                  accept="image/jpeg,image/png,image/webp"
+                  value={multiProfileForm.photo}
+                  onChange={(next) => setMultiProfileForm({ ...multiProfileForm, photo: next })}
+                  onError={handleFileImportError}
+                  onNotice={handleFileImportNotice}
+                />
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start only after sessions are selected and at least one profile change is prepared."
+                status={<StatusBadge tone={multiReady ? "ok" : "warn"}>{multiReady ? "Ready to update" : "No profile changes yet"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() => {
+                    if (!ensureMultiSessions()) return;
+                    const profile_map: Record<string, Record<string, string | null>> = {};
+                    selectedMultiSessions.forEach((session) => {
+                      profile_map[session] = {
+                        first_name: multiProfileForm.first_name || null,
+                        last_name: multiProfileForm.last_name || null,
+                        bio: multiProfileForm.bio || null,
+                        photo: multiProfileForm.photo || null,
+                      };
+                    });
+                    handleJobStart(
+                      "Multi profile",
+                      api.startMultiProfile({
+                        sessions: selectedMultiSessions,
+                        profile_map,
+                        delay_seconds: toInt(multiProfileForm.delay_seconds, 5),
+                      })
+                    );
+                  }}
+                >
+                  Start Multi Profile
+                </button>
+              </SectionCard>
             </div>
           </div>
           )}
 
 
           {multiPanel === "multi-warmup" && (
-          <div className="panel" id="multi-warmup">
+          <div className="panel single-panel" id="multi-warmup">
             <div className="panel-header">
               <h3>Multi Warmup</h3>
               <span className="hint">Group-only warmup across selected sessions</span>
             </div>
             <div className="form-grid">
-              <p className="hint">
-                Warmup mode is defined by the preset (React / Reply / Message). Uses the last 50 messages for context and falls back to reactions if no AI profile is available.
-              </p>
-              <label>
-                Targets (group @usernames)
-                <input
-                  type="text"
-                  value={multiWarmupForm.targets}
-                  onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, targets: e.target.value })}
-                  placeholder="@group1, @group2"
-                />
-              </label>
-	              <label>
-	                Warmup preset
-	                <PresetSelect
-	                  value={multiWarmupForm.preset_name}
-	                  options={warmupPresets}
-	                  placeholder="Select warmup preset"
-	                  searchPlaceholder="Search warmup presets..."
-	                  onChange={(next) => setMultiWarmupForm({ ...multiWarmupForm, preset_name: next })}
-	                />
-	              </label>
-              <button
-                className="primary"
-                onClick={() => {
-                  if (!ensureMultiSessions()) return;
-                  const targets = parseTargets(multiWarmupForm.targets).filter((t) => t !== "me");
-                  if (targets.length === 0) {
-                    setError("Warmup targets must be group usernames");
-                    return;
-                  }
-                  if (!multiWarmupForm.preset_name) {
-                    setError("Select a warmup preset");
-                    return;
-                  }
-                  handleJobStart(
-                    "Multi warmup",
-                    api.startMultiWarmup({
-                      sessions: selectedMultiSessions,
-                      targets,
-                      preset_name: multiWarmupForm.preset_name,
-                    })
-                  );
-                }}
+              <SectionCard
+                title="Inputs"
+                description="Warmup mode comes from the selected preset. TGCampaigner uses recent context and falls back to reactions when AI is not available."
               >
-                Start Multi Warmup
-              </button>
+                <label>
+                  <span className="label-text">
+                    Targets
+                    <TooltipInfo wide>Enter group usernames only, separated by commas or new lines. Personal usernames are not valid warmup targets.</TooltipInfo>
+                  </span>
+                  <input
+                    type="text"
+                    value={multiWarmupForm.targets}
+                    onChange={(e) => setMultiWarmupForm({ ...multiWarmupForm, targets: e.target.value })}
+                    placeholder="@group1, @group2"
+                  />
+                </label>
+                <label>
+                  <span className="label-text">
+                    Warmup preset
+                    <TooltipInfo>Preset decides whether the sessions react, reply, or post messages during warmup.</TooltipInfo>
+                  </span>
+                  <PresetSelect
+                    value={multiWarmupForm.preset_name}
+                    options={warmupPresets}
+                    placeholder="Select warmup preset"
+                    searchPlaceholder="Search warmup presets..."
+                    onChange={(next) => setMultiWarmupForm({ ...multiWarmupForm, preset_name: next })}
+                  />
+                </label>
+              </SectionCard>
+
+              <SectionCard
+                title="Run"
+                description="Start after sessions, group targets, and preset are all ready."
+                status={<StatusBadge tone={multiReady ? "ok" : "warn"}>{multiReady ? "Ready to start" : "Missing required input"}</StatusBadge>}
+              >
+                <button
+                  className="primary"
+                  onClick={() => {
+                    if (!ensureMultiSessions()) return;
+                    const targets = parseTargets(multiWarmupForm.targets).filter((t) => t !== "me");
+                    if (targets.length === 0) {
+                      setError("Warmup targets must be group usernames");
+                      return;
+                    }
+                    if (!multiWarmupForm.preset_name) {
+                      setError("Select a warmup preset");
+                      return;
+                    }
+                    handleJobStart(
+                      "Multi warmup",
+                      api.startMultiWarmup({
+                        sessions: selectedMultiSessions,
+                        targets,
+                        preset_name: multiWarmupForm.preset_name,
+                      })
+                    );
+                  }}
+                >
+                  Start Multi Warmup
+                </button>
+              </SectionCard>
+            </div>
+          </div>
+          )}
+
+          {multiPanel === "multi-dm" || multiPanel === "multi-invite" || multiPanel === "multi-bulk" || multiPanel === "multi-forward" || multiPanel === "multi-profile" || multiPanel === "multi-warmup" ? null : (
+          <div className="panel single-panel">
+            <div className="panel-header">
+              <h3>Multi workflow</h3>
+              <span className="hint">Pick a mode from the sidebar</span>
+            </div>
+            <div className="section-lead">
+              <p>Select one of the multi-account campaign types from the left navigation to configure it here.</p>
             </div>
           </div>
           )}
@@ -7117,76 +7461,109 @@ function App() {
             Refresh
           </button>
         </div>
+        <div className="section-lead">
+          <p>
+            Metrics is the operator dashboard: watch job state, switch the current log source, and review action or
+            audit trails without leaving the app.
+          </p>
+        </div>
+        <div className="status-badge-row">
+          {metricsStatusItems.map((item) => (
+            <StatusBadge key={item.label} tone={item.tone}>
+              {item.label}: {item.text}
+            </StatusBadge>
+          ))}
+        </div>
         <div className="panel-grid">
           <div className="panel">
-            <div className="panel-header">
-              <h3>Jobs</h3>
-              <span className="hint">{jobs.length} total</span>
-            </div>
-            {jobs.length === 0 ? (
-              <p className="muted">No jobs yet.</p>
-            ) : (
-              <div className="job-list">
-                {jobs.map((job) => (
-                  <div key={job.id} className="job-card" onClick={() => setSelectedJobId(job.id)}>
-                    <div>
-                      <h4>{job.type}</h4>
-                      <p className="meta">{job.id}</p>
-                      <p className="meta">Status: {job.status}</p>
-                      {job.error && <p className="meta error">Error: {job.error}</p>}
-                    </div>
-                    <div className="job-actions">
-                      <button
-                        className="ghost"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedJobId(job.id);
-                        }}
-                      >
-                        View logs
-                      </button>
-                      {job.status === "running" && (
-                        <button
-                          className="danger"
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            try {
-                              await api.stopJob(job.id);
-                              updateNotice(`Stopped ${job.id}`);
-                              refreshJobs();
-                            } catch (err: any) {
-                              setError(err.message || "Failed to stop job");
-                            }
-                          }}
-                        >
-                          Stop
-                        </button>
-                      )}
-                    </div>
+            <div className="form-grid">
+              <SectionCard
+                title="Job activity"
+                description="Every run appears here. Choose a job to inspect logs or stop active work."
+                status={<StatusBadge tone={jobs.length > 0 ? "ok" : "neutral"}>{jobs.length > 0 ? `${jobs.length} jobs` : "No jobs yet"}</StatusBadge>}
+              >
+                {jobs.length === 0 ? (
+                  <p className="muted">No jobs yet.</p>
+                ) : (
+                  <div className="job-list">
+                    {jobs.map((job) => (
+                      <div key={job.id} className="job-card" onClick={() => setSelectedJobId(job.id)}>
+                        <div>
+                          <h4>{job.type}</h4>
+                          <p className="meta">{job.id}</p>
+                          <p className="meta">Status: {job.status}</p>
+                          {job.error && <p className="meta error">Error: {job.error}</p>}
+                        </div>
+                        <div className="job-actions">
+                          <button
+                            className="ghost"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedJobId(job.id);
+                            }}
+                          >
+                            View logs
+                          </button>
+                          {job.status === "running" && (
+                            <button
+                              className="danger"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                try {
+                                  await api.stopJob(job.id);
+                                  updateNotice(`Stopped ${job.id}`);
+                                  refreshJobs();
+                                } catch (err: any) {
+                                  setError(err.message || "Failed to stop job");
+                                }
+                              }}
+                            >
+                              Stop
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
+                )}
+              </SectionCard>
+            </div>
           </div>
           <div className="panel">
-            <div className="panel-header">
-              <h3>Log Source</h3>
-            </div>
             <div className="form-grid">
-              <label>
-                Job
-                <select value={selectedJobId} onChange={(e) => setSelectedJobId(e.target.value)}>
-                  <option value="">Latest</option>
-                  {jobs
-                    .slice()
-                    .sort((a, b) => (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || ""))
-                    .map((job) => (
-                      <option key={job.id} value={job.id}>
-                        {job.id} ({job.type})
-                      </option>
-                    ))}
-                </select>
-              </label>
+              <SectionCard
+                title="Log source"
+                description="Switch the live log view to a specific job or keep following the latest output."
+                status={<StatusBadge tone={selectedLogJob ? "ok" : "neutral"}>{selectedLogJob ? selectedLogJob.type : "Latest output"}</StatusBadge>}
+              >
+                <label>
+                  <span className="label-text">
+                    Job
+                    <TooltipInfo>Choose a job when you need its exact action and audit stream. Leave blank to follow the latest logs.</TooltipInfo>
+                  </span>
+                  <select value={selectedJobId} onChange={(e) => setSelectedJobId(e.target.value)}>
+                    <option value="">Latest</option>
+                    {jobs
+                      .slice()
+                      .sort((a, b) => (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || ""))
+                      .map((job) => (
+                        <option key={job.id} value={job.id}>
+                          {job.id} ({job.type})
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <div className="license-details-grid">
+                  <label>
+                    Selected job
+                    <input type="text" value={selectedLogJob?.id || "Latest"} disabled />
+                  </label>
+                  <label>
+                    Job status
+                    <input type="text" value={selectedLogJob?.status || "Streaming latest output"} disabled />
+                  </label>
+                </div>
+              </SectionCard>
             </div>
           </div>
         </div>
@@ -7214,107 +7591,125 @@ function App() {
         <div className="section-header">
           <h2>License</h2>
         </div>
+        <div className="section-lead">
+          <p>
+            License shows the current machine activation, desktop update status, and local reset controls. This page is
+            intentionally operational and read-only except for update and reset actions.
+          </p>
+        </div>
+        <div className="status-badge-row">
+          {licenseStatusItems.map((item) => (
+            <StatusBadge key={item.label} tone={item.tone}>
+              {item.label}: {item.text}
+            </StatusBadge>
+          ))}
+        </div>
         <div className="license-grid">
           <div className="panel">
-            <div className="panel-header">
-              <h3>Current machine license</h3>
-            </div>
-            <div className="license-details-grid">
-              <label>
-                License key
-                <input type="text" value={licenseKeyValue || "Not available"} disabled />
-              </label>
-              <label>
-                Customer email
-                <input type="text" value={licenseEmail || "Not available"} disabled />
-              </label>
-              <label>
-                Token expiry
-                <input
-                  type="text"
-                  value={licenseExp ? new Date(licenseExp * 1000).toLocaleString() : "Not available"}
-                  disabled
-                />
-              </label>
-              <label>
-                Status
-                <input type="text" value={licenseActive ? "Active" : "Inactive"} disabled />
-              </label>
+            <div className="form-grid">
+              <SectionCard
+                title="Current machine license"
+                description="This reflects the activation stored on the current device."
+                status={<StatusBadge tone={licenseActive ? "ok" : "warn"}>{licenseActive ? "Active" : "Inactive"}</StatusBadge>}
+              >
+                <div className="license-details-grid">
+                  <label>
+                    License key
+                    <input type="text" value={licenseKeyValue || "Not available"} disabled />
+                  </label>
+                  <label>
+                    Customer email
+                    <input type="text" value={licenseEmail || "Not available"} disabled />
+                  </label>
+                  <label>
+                    Token expiry
+                    <input
+                      type="text"
+                      value={licenseExp ? new Date(licenseExp * 1000).toLocaleString() : "Not available"}
+                      disabled
+                    />
+                  </label>
+                  <label>
+                    Status
+                    <input type="text" value={licenseActive ? "Active" : "Inactive"} disabled />
+                  </label>
+                </div>
+              </SectionCard>
             </div>
           </div>
           {isTauri() && (
             <div className="panel">
-              <div className="panel-header">
-                <h3>Desktop updates</h3>
-                <span className="hint">{updateInfo?.available ? "Update ready" : "Auto-check enabled"}</span>
-              </div>
-              <p className="helper-text">
-                Before installation, TGCampaigner creates a local backup and verifies data integrity on next launch. If
-                verification fails, backup restore runs automatically.
-              </p>
-              <div className="license-details-grid">
-                <label>
-                  Current version
-                  <input type="text" value={updateInfo?.current_version || "Unknown"} disabled />
-                </label>
-                <label>
-                  Latest version
-                  <input
-                    type="text"
-                    value={updateInfo?.latest_version || updateInfo?.current_version || "Not available"}
-                    disabled
-                  />
-                </label>
-                <label>
-                  Package
-                  <input type="text" value={(updateInfo?.package_kind || "appimage").toUpperCase()} disabled />
-                </label>
-                <label>
-                  Status
-                  <input
-                    type="text"
-                    value={updateStatusMessage || "Automatic check runs on startup and every 6 hours."}
-                    disabled
-                  />
-                </label>
-              </div>
-              <div className="row">
-                <button className="ghost" onClick={checkForUpdates} disabled={checkingUpdates || preparingUpdate}>
-                  {checkingUpdates ? "Checking..." : "Check for updates"}
-                </button>
-                <button
-                  className="primary"
-                  onClick={startUpdateFlow}
-                  disabled={checkingUpdates || preparingUpdate || !canInstallUpdate || hasRunningJobs}
+              <div className="form-grid">
+                <SectionCard
+                  title="Desktop updates"
+                  description="TGCampaigner creates a local backup before install and verifies data integrity on next launch."
+                  status={<StatusBadge tone={canInstallUpdate ? "warn" : "ok"}>{updateInfo?.available ? "Update ready" : "Auto-check enabled"}</StatusBadge>}
                 >
-                  {preparingUpdate
-                    ? "Preparing update..."
-                    : canInstallUpdate
-                      ? `Download v${updateInfo?.latest_version}`
-                      : "No update available"}
-                </button>
+                  <div className="license-details-grid">
+                    <label>
+                      Current version
+                      <input type="text" value={updateInfo?.current_version || "Unknown"} disabled />
+                    </label>
+                    <label>
+                      Latest version
+                      <input
+                        type="text"
+                        value={updateInfo?.latest_version || updateInfo?.current_version || "Not available"}
+                        disabled
+                      />
+                    </label>
+                    <label>
+                      Package
+                      <input type="text" value={(updateInfo?.package_kind || "appimage").toUpperCase()} disabled />
+                    </label>
+                    <label>
+                      Status
+                      <input
+                        type="text"
+                        value={updateStatusMessage || "Automatic check runs on startup and every 6 hours."}
+                        disabled
+                      />
+                    </label>
+                  </div>
+                  <div className="row">
+                    <button className="ghost" onClick={checkForUpdates} disabled={checkingUpdates || preparingUpdate}>
+                      {checkingUpdates ? "Checking..." : "Check for updates"}
+                    </button>
+                    <button
+                      className="primary"
+                      onClick={startUpdateFlow}
+                      disabled={checkingUpdates || preparingUpdate || !canInstallUpdate || hasRunningJobs}
+                    >
+                      {preparingUpdate
+                        ? "Preparing update..."
+                        : canInstallUpdate
+                          ? `Download v${updateInfo?.latest_version}`
+                          : "No update available"}
+                    </button>
+                  </div>
+                  {hasRunningJobs && canInstallUpdate && (
+                    <p className="helper-text">Stop active jobs before starting an update.</p>
+                  )}
+                </SectionCard>
               </div>
-              {hasRunningJobs && canInstallUpdate && (
-                <p className="helper-text">Stop active jobs before starting an update.</p>
-              )}
             </div>
           )}
           <div className="panel license-grid-wide">
-            <div className="panel-header">
-              <h3>Local data reset</h3>
-              <span className="hint">Recommended: keep license</span>
-            </div>
-            <p className="helper-text">
-              Clear local sessions, logs, and runtime state when troubleshooting. Keep license by default so users do not
-              need to reactivate.
-            </p>
-            <div className="row">
-              <button className="ghost" onClick={handleClearLocalData} disabled={resettingData || resettingFactory}>
-                {resettingData ? "Clearing data..." : "Clear local data (keep license)"}
-              </button>
-              <button className="danger" onClick={handleFactoryReset} disabled={resettingData || resettingFactory}>
-                {resettingFactory ? "Resetting..." : "Factory reset (clear data + license)"}
-              </button>
+            <div className="form-grid">
+              <SectionCard
+                title="Local data reset"
+                description="Use reset only when troubleshooting. Keeping the license avoids unnecessary reactivation."
+                status={<StatusBadge tone="warn">Recommended: keep license</StatusBadge>}
+              >
+                <div className="row">
+                  <button className="ghost" onClick={handleClearLocalData} disabled={resettingData || resettingFactory}>
+                    {resettingData ? "Clearing data..." : "Clear local data (keep license)"}
+                  </button>
+                  <button className="danger" onClick={handleFactoryReset} disabled={resettingData || resettingFactory}>
+                    {resettingFactory ? "Resetting..." : "Factory reset (clear data + license)"}
+                  </button>
+                </div>
+              </SectionCard>
             </div>
           </div>
         </div>
