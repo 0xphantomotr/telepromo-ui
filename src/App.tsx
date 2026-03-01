@@ -1278,6 +1278,14 @@ function App() {
     ],
     [workflowActionNodeCount, workflowDraft.id, workflowDraft.name, workflowHasSession, workflowValidationErrors]
   );
+  const workflowReadyCount = useMemo(
+    () => workflowReadinessItems.filter((item) => item.ready).length,
+    [workflowReadinessItems]
+  );
+  const workflowMissingItems = useMemo(
+    () => workflowReadinessItems.filter((item) => !item.ready),
+    [workflowReadinessItems]
+  );
   const selectedNodeReadinessItems = useMemo<ReadinessItem[]>(() => {
     if (!selectedNode) return [];
     const config = selectedNode.config as Record<string, any>;
@@ -3876,8 +3884,16 @@ function App() {
             <div>
               <p className="eyebrow">Workspace</p>
               <h2>{activeTabLabel}</h2>
-              <p className="subtle">Pick a section from the left navigation.</p>
+              <p className="subtle">
+                {showWorkflows ? "Visual workflow builder." : "Pick a section from the left navigation."}
+              </p>
             </div>
+            {showWorkflows ? (
+              <p className="main-header-summary">
+                Start with one Session node, then connect waits and actions. The canvas stays flexible, but the
+                sidebar keeps critical setup, validation, and saved loops easier to scan.
+              </p>
+            ) : null}
           </header>
 
           {showUpdateBanner && (
@@ -5182,16 +5198,6 @@ function App() {
       
       {showWorkflows && (
         <section className="workflow-section">
-          <div className="section-header">
-            <h2>Humanistic loops</h2>
-            <span className="hint">Build session-driven workflows visually</span>
-          </div>
-          <div className="section-lead">
-            <p>
-              Start with one Session node, then connect waits and actions. The canvas stays flexible, but the sidebar
-              now keeps the critical setup, validation, and saved loops easier to scan.
-            </p>
-          </div>
           <div className="status-badge-row">
             <StatusBadge tone={workflowRunning ? "ok" : "neutral"}>
               {workflowRunning ? "Loop running" : "Idle"}
@@ -5208,11 +5214,39 @@ function App() {
               {workflowValidationErrors.length === 0 ? "Validation clean" : `${workflowValidationErrors.length} issue${workflowValidationErrors.length === 1 ? "" : "s"}`}
             </StatusBadge>
           </div>
-          <ReadinessChecklist
-            title="Loop readiness"
-            description="Before starting, make sure the loop has an id, a readable name, one Session node, and at least one valid action path."
-            items={workflowReadinessItems}
-          />
+          <div className="workflow-readiness-strip">
+            <div className="workflow-readiness-row">
+              <div className="workflow-readiness-copy">
+                <span className="workflow-readiness-title">Loop readiness</span>
+                <span className="workflow-readiness-text">
+                  {workflowReadyCount}/{workflowReadinessItems.length} requirements ready
+                </span>
+                {workflowMissingItems.length > 0 ? (
+                  <span className="workflow-readiness-text">
+                    Missing: {workflowMissingItems.map((item) => item.label).join(", ")}
+                  </span>
+                ) : (
+                  <span className="workflow-readiness-text ready">Ready to save or start.</span>
+                )}
+              </div>
+              <StatusBadge tone={workflowMissingItems.length === 0 ? "ok" : "warn"}>
+                {Math.round((workflowReadyCount / workflowReadinessItems.length) * 100)}%
+              </StatusBadge>
+            </div>
+            <div
+              className="workflow-readiness-track"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={workflowReadinessItems.length}
+              aria-valuenow={workflowReadyCount}
+              aria-label="Loop readiness progress"
+            >
+              <span
+                className={`workflow-readiness-fill${workflowMissingItems.length === 0 ? " complete" : ""}`}
+                style={{ width: `${(workflowReadyCount / workflowReadinessItems.length) * 100}%` }}
+              />
+            </div>
+          </div>
           <div className="workflow-layout">
             <div className="panel workflow-canvas-panel">
               <div className="panel-header workflow-header">
@@ -5324,28 +5358,28 @@ function App() {
                         <div className="workflow-overlay-scroll">
                           <SectionCard
                             dense
-                            title="Selected node"
-                            description="Node id stays stable for saved loops. Type is fixed after the node is added."
-                            status={<StatusBadge tone="neutral">{selectedNode.id}</StatusBadge>}
+                            title="Node"
+                            titleHelp={
+                              <TooltipInfo wide>
+                                Node ids stay stable for saved loops. Type is fixed after the node is added.
+                              </TooltipInfo>
+                            }
                           >
-                            <div className="form-grid">
-                              <label>
-                                Node id
-                                <input type="text" value={selectedNode.id} disabled />
-                              </label>
-                              <label>
-                                Type
-                                <input type="text" value={WORKFLOW_NODE_LABELS[selectedNode.type] || selectedNode.type} disabled />
-                              </label>
+                            <div className="workflow-meta-grid">
+                              <div className="workflow-meta-item">
+                                <span className="workflow-meta-label">Node id</span>
+                                <code className="workflow-meta-value" title={selectedNode.id}>
+                                  {selectedNode.id}
+                                </code>
+                              </div>
+                              <div className="workflow-meta-item">
+                                <span className="workflow-meta-label">Type</span>
+                                <span className="workflow-meta-value">
+                                  {WORKFLOW_NODE_LABELS[selectedNode.type] || selectedNode.type}
+                                </span>
+                              </div>
                             </div>
                           </SectionCard>
-                          {selectedNodeReadinessItems.length > 0 ? (
-                            <ReadinessChecklist
-                              title="Node readiness"
-                              description="Finish the required fields for this node before linking it into the final path."
-                              items={selectedNodeReadinessItems}
-                            />
-                          ) : null}
                           <SectionCard
                             dense
                             title="Configuration"
