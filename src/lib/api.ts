@@ -319,6 +319,18 @@ export const api = {
       }>;
       default_id?: string | null;
     }>("/settings/ai"),
+  fetchAiModels: (payload: { provider: string; api_key?: string | null; profile_id?: string | null }) =>
+    request<{
+      provider: string;
+      used_saved_key: boolean;
+      models: Array<{
+        id: string;
+        label: string;
+      }>;
+    }>("/settings/ai/models", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   saveAiSettings: (payload: {
     profiles: Array<{
       id?: string;

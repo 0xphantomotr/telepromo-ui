@@ -63,6 +63,8 @@ const AI_SPINTAX_SETUP_HINT =
   "AI Spintax requires an AI profile with API key. Configure it in Craft presets -> AI profiles.";
 
 const navIconStyle = (src: string): CSSProperties => ({ "--icon": `url(${src})` } as CSSProperties);
+const aiProviderLabel = (provider: string) =>
+  provider === "openai" ? "OpenAI" : provider === "gemini" ? "Gemini" : "Groq";
 
 type SessionItem = {
   name: string;
@@ -98,6 +100,11 @@ type AiProfileForm = {
   provider: string;
   api_key: string;
   model: string;
+};
+
+type AiModelOption = {
+  id: string;
+  label: string;
 };
 
 type CommonOptions = {
@@ -951,6 +958,9 @@ function App() {
     model: "",
   });
   const [aiEditingId, setAiEditingId] = useState<string | null>(null);
+  const [aiFetchedModels, setAiFetchedModels] = useState<AiModelOption[]>([]);
+  const [fetchingAiModels, setFetchingAiModels] = useState(false);
+  const [aiModelsStatus, setAiModelsStatus] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string>("");
   const selectedJobRef = useRef<string>("");
@@ -1912,6 +1922,8 @@ function App() {
       model: "",
     });
     setAiEditingId(null);
+    setAiFetchedModels([]);
+    setAiModelsStatus(null);
   };
 
   const handleEditAiProfile = (profile: AiProfile) => {
@@ -1923,6 +1935,45 @@ function App() {
       api_key: "",
       model: profile.model || "",
     });
+    setAiFetchedModels([]);
+    setAiModelsStatus("Fetch models to refresh the list for this provider.");
+  };
+
+  const handleFetchAiModels = async () => {
+    setError(null);
+    const provider = aiProfileForm.provider.trim();
+    if (!provider) {
+      setError("Select a provider before fetching models.");
+      return;
+    }
+    if (!aiEditingId && !aiProfileForm.api_key.trim()) {
+      setError("Enter an API key before fetching models.");
+      return;
+    }
+    setFetchingAiModels(true);
+    setAiModelsStatus(null);
+    try {
+      const res = await api.fetchAiModels({
+        provider,
+        api_key: aiProfileForm.api_key.trim() || null,
+        profile_id: aiEditingId || null,
+      });
+      const fetchedModels = res.models || [];
+      setAiFetchedModels(fetchedModels);
+      setAiModelsStatus(
+        fetchedModels.length
+          ? `${fetchedModels.length} ${aiProviderLabel(provider)} models loaded${
+              res.used_saved_key ? " using the saved key" : ""
+            }.`
+          : `No ${aiProviderLabel(provider)} models were returned for this key.`
+      );
+    } catch (err: any) {
+      setAiFetchedModels([]);
+      setAiModelsStatus(null);
+      setError(err.message || "Failed to fetch models");
+    } finally {
+      setFetchingAiModels(false);
+    }
   };
 
   const handleSaveAiProfile = async () => {
@@ -4603,7 +4654,11 @@ function App() {
                 Provider
                 <select
                   value={aiProfileForm.provider}
-                  onChange={(e) => setAiProfileForm({ ...aiProfileForm, provider: e.target.value })}
+                  onChange={(e) => {
+                    setAiProfileForm({ ...aiProfileForm, provider: e.target.value });
+                    setAiFetchedModels([]);
+                    setAiModelsStatus(null);
+                  }}
                 >
                   <option value="openai">OpenAI</option>
                   <option value="gemini">Gemini</option>
@@ -4624,16 +4679,48 @@ function App() {
                       : "gpt-4o-mini"
                   }
                 />
+                <span className="helper-text">You can type a model manually or fetch the provider list below.</span>
               </label>
               <label>
                 API key
                 <input
                   type="password"
                   value={aiProfileForm.api_key}
-                  onChange={(e) => setAiProfileForm({ ...aiProfileForm, api_key: e.target.value })}
+                  onChange={(e) => {
+                    setAiProfileForm({ ...aiProfileForm, api_key: e.target.value });
+                    setAiFetchedModels([]);
+                    setAiModelsStatus(null);
+                  }}
                   placeholder={aiEditingId ? "Leave blank to keep existing key" : "Paste your API key"}
                 />
+                <span className="helper-text">
+                  {aiEditingId
+                    ? "Leave blank to keep the saved key. Fetch models can reuse the saved key for the same provider."
+                    : "Paste the API key first if you want to fetch the available models."}
+                </span>
               </label>
+              <div className="row">
+                <button className="ghost" onClick={handleFetchAiModels} disabled={fetchingAiModels}>
+                  {fetchingAiModels ? "Fetching models..." : "Fetch models"}
+                </button>
+                {aiFetchedModels.length > 0 && (
+                  <label>
+                    Fetched models
+                    <select
+                      value={aiFetchedModels.some((item) => item.id === aiProfileForm.model) ? aiProfileForm.model : ""}
+                      onChange={(e) => setAiProfileForm({ ...aiProfileForm, model: e.target.value })}
+                    >
+                      <option value="">Select fetched model</option>
+                      {aiFetchedModels.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+              {aiModelsStatus && <p className="helper-text">{aiModelsStatus}</p>}
               <div className="row">
                 <button className="primary" onClick={handleSaveAiProfile}>
                   {aiEditingId ? "Update profile" : "Add profile"}
