@@ -280,6 +280,9 @@ export const api = {
       warmup_modes?: string[] | null;
       context_messages?: number | null;
       ai_profile_id?: string | null;
+      ai_use_context?: boolean | null;
+      ai_max_words?: number | null;
+      ai_prompt_template?: string | null;
     }> }>(kind ? `/presets?kind=${encodeURIComponent(kind)}` : "/presets"),
   savePreset: (payload: {
     name: string;
@@ -299,6 +302,9 @@ export const api = {
     warmup_modes?: string[] | null;
     context_messages?: number | null;
     ai_profile_id?: string | null;
+    ai_use_context?: boolean | null;
+    ai_max_words?: number | null;
+    ai_prompt_template?: string | null;
   }) =>
     request<{ ok: boolean; preset: Record<string, unknown> }>("/presets", {
       method: "POST",
@@ -587,6 +593,9 @@ export const api = {
     warmup_mode?: string;
     context_messages?: number;
     ai_profile_id?: string;
+    ai_use_context?: boolean;
+    ai_max_words?: number;
+    ai_prompt_template?: string;
   }) =>
     request<{ job_id: string }>("/campaigns/warmup", {
       method: "POST",
@@ -719,6 +728,9 @@ export const api = {
     warmup_mode?: string;
     context_messages?: number;
     ai_profile_id?: string;
+    ai_use_context?: boolean;
+    ai_max_words?: number;
+    ai_prompt_template?: string;
   }) =>
     request<{ job_id: string }>("/campaigns/multi/warmup", {
       method: "POST",

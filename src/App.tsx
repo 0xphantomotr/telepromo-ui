@@ -189,6 +189,9 @@ type PresetItem = {
   warmup_modes?: string[] | null;
   context_messages?: number | null;
   ai_profile_id?: string | null;
+  ai_use_context?: boolean | null;
+  ai_max_words?: number | null;
+  ai_prompt_template?: string | null;
 };
 
 type PresetForm = {
@@ -208,6 +211,9 @@ type PresetForm = {
   warmup_modes: string[];
   context_messages: string;
   ai_profile_id: string;
+  ai_use_context: boolean;
+  ai_max_words: string;
+  ai_prompt_template: string;
 };
 
 type SessionProxyForm = {
@@ -323,6 +329,9 @@ type MultiWarmupForm = {
   preset_name: string;
 };
 
+const DEFAULT_WARMUP_AI_PROMPT =
+  "You are a human participant in a Telegram group. No marketing, no links, no hashtags. Keep it natural and conversational. Make sure the reply is complete and ends with proper punctuation. Never output fragments (e.g. 'That', 'That's an'). Match the language and tone. If you are unsure, respond with a short neutral acknowledgement like 'Okay.'";
+
 
 const baseOptions: CommonOptions = {
   use_spintax: false,
@@ -355,6 +364,9 @@ const defaultPresetForm: PresetForm = {
   warmup_modes: ["reply"],
   context_messages: "50",
   ai_profile_id: "",
+  ai_use_context: true,
+  ai_max_words: "35",
+  ai_prompt_template: DEFAULT_WARMUP_AI_PROMPT,
 };
 
 const defaultProxyForm: SessionProxyForm = {
@@ -2999,6 +3011,9 @@ function App() {
         const warmupModes = presetForm.warmup_modes.length ? presetForm.warmup_modes : ["reply"];
         payload.warmup_modes = warmupModes;
         payload.context_messages = toInt(presetForm.context_messages, 50);
+        payload.ai_use_context = presetForm.ai_use_context;
+        payload.ai_max_words = toInt(presetForm.ai_max_words, 35);
+        payload.ai_prompt_template = presetForm.ai_prompt_template.trim() || undefined;
         if (warmupModes.some((mode) => mode === "reply" || mode === "message")) {
           const fallbackProfile = aiDefaultId || aiReadyProfiles[0]?.id;
           payload.ai_profile_id = presetForm.ai_profile_id || fallbackProfile || undefined;
@@ -3063,6 +3078,9 @@ function App() {
           : defaultPresetForm.warmup_modes,
       context_messages: String(preset.context_messages ?? defaultPresetForm.context_messages),
       ai_profile_id: preset.ai_profile_id ?? defaultPresetForm.ai_profile_id,
+      ai_use_context: preset.ai_use_context ?? defaultPresetForm.ai_use_context,
+      ai_max_words: String(preset.ai_max_words ?? defaultPresetForm.ai_max_words),
+      ai_prompt_template: preset.ai_prompt_template ?? defaultPresetForm.ai_prompt_template,
     });
   };
 
@@ -5139,27 +5157,62 @@ function App() {
                         type="number"
                         value={presetForm.context_messages}
                         onChange={(e) => setPresetForm({ ...presetForm, context_messages: e.target.value })}
+                        disabled={!presetForm.ai_use_context}
                       />
                     </label>
                   </div>
                   {presetForm.warmup_modes.some((mode) => mode === "reply" || mode === "message") && (
-                    <label>
-                      AI profile
-                      <select
-                        value={presetForm.ai_profile_id}
-                        onChange={(e) => setPresetForm({ ...presetForm, ai_profile_id: e.target.value })}
-                      >
-                        <option value="">Use default</option>
-                        {aiReadyProfiles.map((profile) => (
-                          <option key={profile.id} value={profile.id}>
-                            {profile.label || profile.provider} {profile.model ? `(${profile.model})` : ""}
-                          </option>
-                        ))}
-                      </select>
-                      {!hasAiProfiles && (
-                        <span className="hint">No AI profiles with keys saved. Warmup will react only.</span>
-                      )}
-                    </label>
+                    <>
+                      <div className="row">
+                        <label>
+                          AI profile
+                          <select
+                            value={presetForm.ai_profile_id}
+                            onChange={(e) => setPresetForm({ ...presetForm, ai_profile_id: e.target.value })}
+                          >
+                            <option value="">Use default</option>
+                            {aiReadyProfiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>
+                                {profile.label || profile.provider} {profile.model ? `(${profile.model})` : ""}
+                              </option>
+                            ))}
+                          </select>
+                          {!hasAiProfiles && (
+                            <span className="hint">No AI profiles with keys saved. Warmup will react only.</span>
+                          )}
+                        </label>
+                        <label>
+                          Max words
+                          <input
+                            type="number"
+                            value={presetForm.ai_max_words}
+                            onChange={(e) => setPresetForm({ ...presetForm, ai_max_words: e.target.value })}
+                          />
+                        </label>
+                      </div>
+                      <div className="toggles">
+                        <label className="toggle">
+                          <input
+                            type="checkbox"
+                            checked={presetForm.ai_use_context}
+                            onChange={(e) => setPresetForm({ ...presetForm, ai_use_context: e.target.checked })}
+                          />
+                          Use conversation context
+                        </label>
+                      </div>
+                      <label>
+                        AI prompt
+                        <textarea
+                          rows={6}
+                          value={presetForm.ai_prompt_template}
+                          onChange={(e) => setPresetForm({ ...presetForm, ai_prompt_template: e.target.value })}
+                          placeholder="Describe how replies or messages should sound."
+                        />
+                        <span className="hint">
+                          Keep the default if you want TGCampaigner&apos;s current reply style. Turn off context above to generate only from this prompt and the target message.
+                        </span>
+                      </label>
+                    </>
                   )}
                   <div className="row">
                     <label>
@@ -6728,12 +6781,12 @@ function App() {
           <div className="panel single-panel">
             <div className="panel-header">
               <h3>Warmup</h3>
-              <span className="hint">Group-only warmup with AI context</span>
+              <span className="hint">Group-only warmup with preset-driven AI behavior</span>
             </div>
             <div className="form-grid">
               <SectionCard
                 title="Inputs"
-                description="Warmup mode comes from the selected preset. TGCampaigner uses recent context and falls back to reactions when AI is not available."
+                description="Warmup mode, AI prompt, context usage, and size all come from the selected preset. TGCampaigner still falls back to reactions when AI is not available."
               >
                 <label>
                   <span className="label-text">
@@ -7489,7 +7542,7 @@ function App() {
             <div className="form-grid">
               <SectionCard
                 title="Inputs"
-                description="Warmup mode comes from the selected preset. TGCampaigner uses recent context and falls back to reactions when AI is not available."
+                description="Warmup mode, AI prompt, context usage, and size all come from the selected preset. TGCampaigner still falls back to reactions when AI is not available."
               >
                 <label>
                   <span className="label-text">
