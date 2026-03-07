@@ -87,7 +87,8 @@ export function FilePathField({
         <input
           type="text"
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          readOnly
+          placeholder="Choose or drop a file"
         />
       </label>
       <div className="file-path-actions">
@@ -98,6 +99,18 @@ export function FilePathField({
           disabled={uploading}
         >
           {uploading ? "Importing..." : "Choose file"}
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => {
+            onChange("");
+            setSavedPath(null);
+            setSavedHint(null);
+          }}
+          disabled={uploading || !value}
+        >
+          Clear
         </button>
         <span className="hint">{compact ? "or drop here" : "or drop file here"}</span>
       </div>

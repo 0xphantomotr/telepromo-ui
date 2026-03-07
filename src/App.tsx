@@ -3478,7 +3478,7 @@ function App() {
       case "dm":
         return [
           { label: "Session selected", ready: hasText(dmForm.session), detail: dmForm.session || "Choose the account that will send messages." },
-          { label: "CSV loaded", ready: hasText(dmForm.input_file), detail: dmForm.input_file || "Import or paste a CSV path with targets." },
+          { label: "CSV loaded", ready: hasText(dmForm.input_file), detail: dmForm.input_file || "Import a CSV with targets." },
           { label: "Message ready", ready: hasText(dmForm.message), detail: hasText(dmForm.message) ? "Message body set." : "Add the DM text to send." },
           {
             label: "AI Spintax ready",
@@ -3489,7 +3489,7 @@ function App() {
       case "invite":
         return [
           { label: "Session selected", ready: hasText(inviteForm.session), detail: inviteForm.session || "Choose the account that will send the invite DM." },
-          { label: "CSV loaded", ready: hasText(inviteForm.input_file), detail: inviteForm.input_file || "Import or paste a CSV path with targets." },
+          { label: "CSV loaded", ready: hasText(inviteForm.input_file), detail: inviteForm.input_file || "Import a CSV with targets." },
           { label: "Invite URL set", ready: hasText(inviteForm.invite_url), detail: inviteForm.invite_url || "Add the group or channel invite URL." },
           {
             label: "AI Spintax ready",
@@ -3500,13 +3500,13 @@ function App() {
       case "bulk_add":
         return [
           { label: "Session selected", ready: hasText(bulkAddForm.session), detail: bulkAddForm.session || "Choose the account that will add members." },
-          { label: "CSV loaded", ready: hasText(bulkAddForm.input_file), detail: bulkAddForm.input_file || "Import or paste a CSV path with users." },
+          { label: "CSV loaded", ready: hasText(bulkAddForm.input_file), detail: bulkAddForm.input_file || "Import a CSV with users." },
           { label: "Target group set", ready: hasText(bulkAddForm.target_ref), detail: bulkAddForm.target_ref || "Add the destination group @username or id." },
         ];
       case "forward":
         return [
           { label: "Session selected", ready: hasText(forwardForm.session), detail: forwardForm.session || "Choose the account that will forward the message." },
-          { label: "CSV loaded", ready: hasText(forwardForm.input_file), detail: forwardForm.input_file || "Import or paste a CSV path with users." },
+          { label: "CSV loaded", ready: hasText(forwardForm.input_file), detail: forwardForm.input_file || "Import a CSV with users." },
           {
             label: "Source message identified",
             ready: hasText(forwardForm.message_link) || hasText(forwardForm.source_peer) || hasText(forwardForm.message_id),
@@ -3548,7 +3548,7 @@ function App() {
       case "multi-dm":
         return [
           { label: "Sessions selected", ready: selectedMultiSessions.length > 0, detail: sessionDetail },
-          { label: "CSV loaded", ready: hasText(multiForm.input_file), detail: multiForm.input_file || "Import or paste a CSV path with targets." },
+          { label: "CSV loaded", ready: hasText(multiForm.input_file), detail: multiForm.input_file || "Import a CSV with targets." },
           { label: "Message ready", ready: hasText(multiForm.message), detail: hasText(multiForm.message) ? "Message body set." : "Add the DM text to send." },
           {
             label: "AI Spintax ready",
@@ -3559,7 +3559,7 @@ function App() {
       case "multi-invite":
         return [
           { label: "Sessions selected", ready: selectedMultiSessions.length > 0, detail: sessionDetail },
-          { label: "CSV loaded", ready: hasText(multiInviteForm.input_file), detail: multiInviteForm.input_file || "Import or paste a CSV path with targets." },
+          { label: "CSV loaded", ready: hasText(multiInviteForm.input_file), detail: multiInviteForm.input_file || "Import a CSV with targets." },
           { label: "Invite URL set", ready: hasText(multiInviteForm.invite_url), detail: multiInviteForm.invite_url || "Add the group or channel invite URL." },
           {
             label: "AI Spintax ready",
@@ -3570,13 +3570,13 @@ function App() {
       case "multi-bulk":
         return [
           { label: "Sessions selected", ready: selectedMultiSessions.length > 0, detail: sessionDetail },
-          { label: "CSV loaded", ready: hasText(multiBulkAddForm.input_file), detail: multiBulkAddForm.input_file || "Import or paste a CSV path with users." },
+          { label: "CSV loaded", ready: hasText(multiBulkAddForm.input_file), detail: multiBulkAddForm.input_file || "Import a CSV with users." },
           { label: "Target group set", ready: hasText(multiBulkAddForm.target_ref), detail: multiBulkAddForm.target_ref || "Add the destination group @username or id." },
         ];
       case "multi-forward":
         return [
           { label: "Sessions selected", ready: selectedMultiSessions.length > 0, detail: sessionDetail },
-          { label: "CSV loaded", ready: hasText(multiForwardForm.input_file), detail: multiForwardForm.input_file || "Import or paste a CSV path with users." },
+          { label: "CSV loaded", ready: hasText(multiForwardForm.input_file), detail: multiForwardForm.input_file || "Import a CSV with users." },
           {
             label: "Source message identified",
             ready: hasText(multiForwardForm.message_link) || (hasText(multiForwardForm.source_peer) && hasText(multiForwardForm.message_id)),
@@ -4817,18 +4817,21 @@ function App() {
 
               <SectionCard
                 title="Output"
-                description="Choose where the CSV will be written and whether to create a duplicate message-ready file."
+                description="Choose where the CSV will be written and whether to create a duplicate message-ready file. Use either a data-relative path or an absolute system path."
                 status={<StatusBadge tone={gatherUsersResult ? "ok" : "neutral"}>{gatherUsersResult ? "Last run saved" : "No output yet"}</StatusBadge>}
               >
                 <label>
-                  Output CSV path
+                  <span className="label-text">
+                    Output CSV path
+                    <TooltipInfo>Examples: <code>gather/mygroup_members.csv</code> or <code>/home/you/Desktop/mygroup_members.csv</code>.</TooltipInfo>
+                  </span>
                   <input
                     type="text"
                     value={gatherUsersForm.output_file}
                     onChange={(e) =>
                       setGatherUsersForm((prev) => ({ ...prev, output_file: e.target.value }))
                     }
-                    placeholder="gather/mygroup_members.csv"
+                    placeholder="gather/mygroup_members.csv or /home/you/Desktop/mygroup_members.csv"
                   />
                 </label>
                 <div className="row">
@@ -4890,7 +4893,7 @@ function App() {
                   {
                     label: "Output path set",
                     ready: hasText(gatherUsersForm.output_file),
-                    detail: gatherUsersForm.output_file || "Pick the CSV path inside the backend data folder.",
+                    detail: gatherUsersForm.output_file || "Use a data-relative path or any absolute path on this system.",
                   },
                 ]}
               />
